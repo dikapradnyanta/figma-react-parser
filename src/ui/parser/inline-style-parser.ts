@@ -1,7 +1,7 @@
     // Parses style={{ key: value, ... }} from JSX
     // Returns a flat object of CSS-like properties
     // ═══════════════════════════════════════════════════════════
-    function parseInlineStyleStr(str) {
+    export function parseInlineStyles(str) {
       // str is the content inside style={{ ... }}
       // After theme token substitution, values should be literals like "16" or '"#0D3B66"'
       const style = {};

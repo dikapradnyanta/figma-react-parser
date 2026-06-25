@@ -456,3 +456,7 @@ export function hexToRgb(hex: string): RGB {
   return r ? { r: parseInt(r[1], 16) / 255, g: parseInt(r[2], 16) / 255, b: parseInt(r[3], 16) / 255 } : { r: 1, g: 1, b: 1 };
 }
 
+export function getSpacing(val: string): number {
+  return parseInt(val) || 0;
+}
+

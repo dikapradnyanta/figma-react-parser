@@ -63,9 +63,14 @@ import { parseInlineStyles } from './inline-style-parser';
 
       skipExprAndExtractJSX() {
         if (this.src[this.pos] !== '{') return [];
+        const exprStart = this.pos;
         this.pos++;
         let depth = 1;
         let jsxChildren = [];
+
+        // Check if this is a .map() expression
+        const exprPreview = this.src.slice(exprStart, Math.min(this.src.length, exprStart + 80));
+        const isMapExpr = /\.(map|filter|flatMap)\s*\(/.test(exprPreview);
 
         while (this.pos < this.src.length && depth > 0) {
           const ch = this.src[this.pos];
@@ -91,12 +96,38 @@ import { parseInlineStyles } from './inline-style-parser';
               const savedPos = this.pos;
               try {
                 const child = this.parseElement();
-                if (child) { jsxChildren.push(child); continue; }
+                if (child) {
+                  // If .map(), duplicate 2x extra as placeholders
+                  if (isMapExpr && jsxChildren.length === 0) {
+                    jsxChildren.push(child);
+                    jsxChildren.push(JSON.parse(JSON.stringify(child)));
+                    jsxChildren.push(JSON.parse(JSON.stringify(child)));
+                  } else {
+                    jsxChildren.push(child);
+                  }
+                  continue;
+                }
               } catch (_) {}
               this.pos = savedPos;
             }
           }
           this.pos++;
+        }
+
+        // Add dummy text for simple expressions
+        if (jsxChildren.length === 0) {
+          const exprContent = this.src.slice(exprStart + 1, this.pos - 1).trim();
+          if (exprContent.length > 0 && exprContent.length < 60 && !exprContent.includes('=>')) {
+            jsxChildren.push({
+              tag: '_text',
+              classes: [],
+              text: '…',
+              attrs: {},
+              children: [],
+              inlineStyle: {},
+              _textOnly: true,
+            });
+          }
         }
         return jsxChildren;
       }
@@ -227,7 +258,7 @@ import { parseInlineStyles } from './inline-style-parser';
 
         // Parse styleRaw into inlineStyle object
         if (styleRaw) {
-          attrs['__inlineStyle'] = parseInlineStyleStr(styleRaw);
+          attrs['__inlineStyle'] = parseInlineStyles(styleRaw);
         }
 
         return attrs;

@@ -1,6 +1,6 @@
 import { ParsedNode } from './types';
-import { applyContainerStyles, applyInlineStyle, applyTextStyles, applyInlineTextStyle } from './styles';
-import { pluginLog } from './index';
+import { applyContainerStyles, applyInlineStyle, applyTextStyles, applyInlineTextStyle, hexToRgb, resolveColor, getSpacing } from './styles';
+import { pluginLog } from './logger';
 
 export function layerName(node: ParsedNode): string {
   const cs = node.classes;

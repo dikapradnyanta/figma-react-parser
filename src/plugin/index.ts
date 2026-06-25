@@ -2,10 +2,7 @@ import { ParsedScreen } from './types';
 import { loadFonts, createColorStyles, createTextStyles, hexToRgb } from './styles';
 import { buildNode } from './node-builder';
 import { addStatusBar, addBottomNav, addPrototyping } from './prototyping';
-
-export function pluginLog(msg: string, type: 'info'|'error' = 'info') {
-  figma.ui.postMessage({ type: 'log', text: msg, logType: type });
-}
+import { pluginLog } from './logger';
 
 figma.showUI(__html__, { width: 500, height: 600, themeColors: true });
 figma.ui.onmessage = async (msg) => {
