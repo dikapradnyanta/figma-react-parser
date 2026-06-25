@@ -1,0 +1,6 @@
+node_modules/
+.DS_Store
+.env
+*.log
+
+# Keep dist for figma plugin as it uses it as the source for manifest, but typically we could ignore it if we had a CI. Since this is local, Figma needs dist. Wait, let's just ignore node_modules.

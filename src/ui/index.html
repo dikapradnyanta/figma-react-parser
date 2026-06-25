@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  
+</head>
+<body>
+  <h1>⚡ React → Figma Parser v2</h1>
+  <p class="subtitle">Upload React/Next.js ZIP → auto-generate Figma screens dengan inline styles + Tailwind</p>
+
+  <div id="dropzone">
+    <div class="icon">📦</div>
+    <div class="main-text">Drop your React ZIP here</div>
+    <div class="sub-text">supports .tsx · .jsx · inline style · Tailwind · theme tokens</div>
+  </div>
+  <input type="file" id="fileInput" accept=".zip" style="display:none;">
+
+  <div id="status-area">
+    <div style="display: flex; align-items: center; justify-content: space-between;">
+      <div class="status-text" id="status-label">Starting...</div>
+    </div>
+    <div class="progress-bg"><div class="progress-fill" id="progress-bar"></div></div>
+    <div style="position: relative;">
+      <button id="copy-log-btn" class="copy-btn" title="Copy logs" aria-label="Copy logs" style="position: absolute; top: 8px; right: 16px; background: rgba(22,27,34,0.8);">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+      </button>
+      <div class="log-area" id="log-area"></div>
+    </div>
+  </div>
+
+  <div class="features">
+    <span class="badge">✓ Inline style={{}}</span>
+    <span class="badge">✓ Theme token resolver</span>
+    <span class="badge">✓ Tailwind Colors</span>
+    <span class="badge">✓ Auto-Layout</span>
+    <span class="badge">✓ Nested Nodes (AST)</span>
+    <span class="badge">✓ Icon Placeholders</span>
+    <span class="badge">✓ Shadow Effects</span>
+    <span class="badge">✓ Prototyping Links</span>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script type="module" src="./main.ts"></script>
+</body>
+</html>

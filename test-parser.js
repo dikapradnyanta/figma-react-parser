@@ -1,117 +1,6 @@
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif;
-      background: #0D1117; color: #E6EDF3; padding: 18px;
-    }
-    h1 {
-      font-size: 17px; font-weight: 700;
-      background: linear-gradient(135deg, #4A90E2, #A78BFA);
-      -webkit-background-clip: text; background-clip: text;
-      -webkit-text-fill-color: transparent; margin-bottom: 4px;
-    }
-    p.subtitle { font-size: 11px; color: #8B949E; margin-bottom: 14px; }
-    #dropzone {
-      border: 2px dashed #30363D; border-radius: 12px;
-      padding: 28px 16px; text-align: center; cursor: pointer;
-      transition: all 0.2s ease; background: #161B22;
-    }
-    #dropzone:hover, #dropzone.hover { border-color: #4A90E2; background: rgba(74,144,226,0.07); }
-    #dropzone .icon { font-size: 28px; margin-bottom: 8px; }
-    #dropzone .main-text { font-size: 13px; font-weight: 600; color: #C9D1D9; margin-bottom: 4px; }
-    #dropzone .sub-text { font-size: 10px; color: #6E7681; }
-    #status-area { display: none; margin-top: 14px; background: #161B22; border-radius: 12px; padding: 14px; }
-    #status-area.visible { display: block; }
-    .progress-bg { width: 100%; height: 4px; background: #30363D; border-radius: 2px; margin: 8px 0; overflow: hidden; }
-    .progress-fill { height: 100%; background: linear-gradient(90deg, #4A90E2, #A78BFA); border-radius: 2px; transition: width 0.3s ease; width: 0%; }
-    .status-text { font-size: 11px; color: #8B949E; }
-    .log-area { margin-top: 8px; font-size: 10px; color: #6E7681; font-family: 'Courier New', monospace; max-height: 120px; overflow-y: auto; line-height: 1.7; }
-    .log-line { margin: 1px 0; }
-    .log-success { color: #3FB950; } .log-error { color: #F85149; } .log-info { color: #58A6FF; }
-    .features { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 14px; }
-    .badge { background: #1C2128; border: 1px solid #30363D; border-radius: 20px; padding: 3px 8px; font-size: 10px; color: #8B949E; }
-  </style>
-</head>
-<body>
-  <h1>⚡ React → Figma Parser v2</h1>
-  <p class="subtitle">Upload React/Next.js ZIP → auto-generate Figma screens dengan inline styles + Tailwind</p>
 
-  <div id="dropzone">
-    <div class="icon">📦</div>
-    <div class="main-text">Drop your React ZIP here</div>
-    <div class="sub-text">supports .tsx · .jsx · inline style · Tailwind · theme tokens</div>
-  </div>
-  <input type="file" id="fileInput" accept=".zip" style="display:none;">
-
-  <div id="status-area">
-    <div class="status-text" id="status-label">Starting...</div>
-    <div class="progress-bg"><div class="progress-fill" id="progress-bar"></div></div>
-    <div class="log-area" id="log-area"></div>
-  </div>
-
-  <div class="features">
-    <span class="badge">✓ Inline style={{}}</span>
-    <span class="badge">✓ Theme token resolver</span>
-    <span class="badge">✓ Tailwind Colors</span>
-    <span class="badge">✓ Auto-Layout</span>
-    <span class="badge">✓ Nested Nodes (AST)</span>
-    <span class="badge">✓ Icon Placeholders</span>
-    <span class="badge">✓ Shadow Effects</span>
-    <span class="badge">✓ Prototyping Links</span>
-  </div>
-
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-  <script>
-    // ── UI SETUP ──────────────────────────────────────────────
-    const dropzone   = document.getElementById('dropzone');
-    const fileInput  = document.getElementById('fileInput');
-    const statusArea = document.getElementById('status-area');
-    const statusLabel= document.getElementById('status-label');
-    const progressBar= document.getElementById('progress-bar');
-    const logArea    = document.getElementById('log-area');
-
-    function log(msg, type = 'info') {
-      const el = document.createElement('div');
-      el.className = `log-line log-${type}`;
-      el.textContent = msg;
-      logArea.appendChild(el);
-      logArea.scrollTop = logArea.scrollHeight;
-    }
-    function setProgress(pct, label) {
-      progressBar.style.width = pct + '%';
-      if (label) statusLabel.textContent = label;
-    }
-
-    dropzone.addEventListener('click', () => fileInput.click());
-    dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('hover'); });
-    dropzone.addEventListener('dragleave', () => dropzone.classList.remove('hover'));
-    dropzone.addEventListener('drop', e => {
-      e.preventDefault(); dropzone.classList.remove('hover');
-      if (e.dataTransfer.files.length) handleZip(e.dataTransfer.files[0]);
-    });
-    fileInput.addEventListener('change', e => { if (e.target.files.length) handleZip(e.target.files[0]); });
-
-    onmessage = (event) => {
-      const msg = event.data.pluginMessage;
-      if (!msg) return;
-      if (msg.type === 'status') {
-        if (msg.progress !== undefined) setProgress(msg.progress, msg.text);
-        log(msg.text, msg.isError ? 'error' : msg.done ? 'success' : 'info');
-      } else if (msg.type === 'log') {
-        log(msg.text, msg.logType || 'info');
-      }
-    };
-
-    // ══════════════════════════════════════════════════════════
-    // THEME RESOLVER
-    // Reads theme.ts/.js from ZIP and builds a flat token map:
-    // { "colors.primary": "#0D3B66", "radii.card": 16, ... }
-    // ══════════════════════════════════════════════════════════
-    function buildThemeMap(zipFiles) {
+const fs = require('fs');
+function buildThemeMap(zipFiles) {
       const tokenMap = {};
 
       // Find theme file
@@ -308,6 +197,16 @@
           }).sort((a, b) => countNodes(b.tree) - countNodes(a.tree)).slice(0, 8);
         }
 
+        // Logical sorting
+        const orderMap = { "home": 1, "materials": 2, "quiz": 3, "forum": 4 };
+        screens.sort((a, b) => {
+          const nameA = a.name.toLowerCase();
+          const nameB = b.name.toLowerCase();
+          const weightA = Object.keys(orderMap).find(k => nameA.includes(k)) ? orderMap[Object.keys(orderMap).find(k => nameA.includes(k))] : 99;
+          const weightB = Object.keys(orderMap).find(k => nameB.includes(k)) ? orderMap[Object.keys(orderMap).find(k => nameB.includes(k))] : 99;
+          return weightA - weightB || a.name.localeCompare(b.name);
+        });
+
         log(`✅ ${screens.length} screens from ${parsedFiles.length} files`, 'success');
         screens.forEach(s => log(`  📱 ${s.name}`, 'success'));
 
@@ -327,8 +226,17 @@
       return 1 + (node.children || []).reduce((s, c) => s + countNodes(c), 0);
     }
 
+    let dynamicIcons = new Set();
+
     // ── CODE CLEANER ──
     function cleanCode(code) {
+      const importRegex = /import\s+\{([^}]+)\}\s+from\s+['"]lucide-react['"]/g;
+      let m;
+      while ((m = importRegex.exec(code)) !== null) {
+        const icons = m[1].split(',').map(s => s.trim()).filter(s => s);
+        icons.forEach(i => dynamicIcons.add(i));
+      }
+
       code = code.replace(/\/\/[^\n]*/g, '');
       code = code.replace(/\/\*[\s\S]*?\*\//g, '');
       code = code.replace(/^import\b[^\n]*\n?/gm, '');
@@ -341,7 +249,7 @@
 
       const isCustom = /^[A-Z]/.test(node.tag);
       // Skip known icon components
-      if (isCustom && ICON_NAMES.has(node.tag)) {
+      if (isCustom && (ICON_NAMES.has(node.tag) || dynamicIcons.has(node.tag))) {
         node.isIcon = true;
         return;
       }
@@ -412,6 +320,18 @@
     function extractStyleValue(raw) {
       if (!raw) return null;
       raw = raw.trim();
+
+      // Ternary: cond ? A : B
+      if (raw.includes('?')) {
+        // Split by ? and : but be careful with colons in strings?
+        // Actually since we just need the last part, we can just take everything after the last colon,
+        // or just use a simple regex for `cond ? A : B`
+        const colonIdx = raw.lastIndexOf(':');
+        if (colonIdx !== -1) {
+          const fallback = raw.slice(colonIdx + 1).trim();
+          return extractStyleValue(fallback);
+        }
+      }
 
       // Quoted string: "..." or '...'
       if ((raw.startsWith('"') && raw.endsWith('"')) ||
@@ -787,6 +707,12 @@
         };
       }
     }
-  </script>
-</body>
-</html>
+  
+
+const themeSrc = fs.readFileSync("test/theme.ts", "utf8");
+const tokenMap = parseThemeContent(themeSrc);
+
+let src = fs.readFileSync("prototype_source/src/app/components/screens/forum-screen.tsx", "utf8");
+src = applyThemeTokens(src, tokenMap);
+
+console.log(JSON.stringify(parseAllComponents(src), null, 2));

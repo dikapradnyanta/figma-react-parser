@@ -4,8 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "build": "tsc",
-    "watch": "tsc -w"
+    "build": "vite build && vite build --config vite.config.plugin.ts",
+    "watch": "vite build --watch"
   },
   "keywords": [],
   "author": "",
@@ -13,6 +13,9 @@
   "type": "commonjs",
   "devDependencies": {
     "@figma/plugin-typings": "^1.130.0",
-    "typescript": "^6.0.3"
+    "@types/node": "^26.0.1",
+    "typescript": "^6.0.3",
+    "vite": "^8.1.0",
+    "vite-plugin-singlefile": "^2.3.3"
   }
 }

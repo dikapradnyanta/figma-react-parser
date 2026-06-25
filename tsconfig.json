@@ -1,10 +1,14 @@
 {
   "compilerOptions": {
     "target": "es2018",
-    "lib": ["es2018"],
+    "module": "esnext",
+    "moduleResolution": "node",
+    "lib": ["es2018", "DOM"],
     "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
     "typeRoots": ["./node_modules/@types", "./node_modules/@figma"],
     "noEmitOnError": false
   },
-  "files": ["code.ts"]
+  "include": ["src/**/*", "vite.config*.ts"]
 }
