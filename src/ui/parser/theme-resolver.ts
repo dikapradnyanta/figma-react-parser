@@ -66,7 +66,7 @@
         const valStr = typeof val === 'number' ? String(val) : `"${val}"`;
         // Replace occurrences like: colors.primary (not inside string literals ideally)
         const escapedKey = key.replace(/\./g, '\\.').replace(/\[/g, '\\[').replace(/\]/g, '\\]');
-        code = code.replace(new RegExp(escapedKey, 'g'), valStr);
+        code = code.replace(new RegExp('\\b' + escapedKey + '\\b', 'g'), valStr);
       }
       return code;
     }

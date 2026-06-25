@@ -14,7 +14,8 @@
 
       // Parse key: value pairs
       // Handles: key: "string", key: 123, key: `template`, key: `${expr}`, key: "val" + "val"
-      const kvRe = /([a-zA-Z]+[a-zA-Z0-9]*)\s*:\s*/g;
+      // Added `(?:^|[,{])\s*` so it only detects keys that are actually preceded by a comma or start of string
+      const kvRe = /(?:^|[,{])\s*([a-zA-Z]+[a-zA-Z0-9]*)\s*:\s*/g;
       let match;
       const positions = [];
       while ((match = kvRe.exec(str)) !== null) {

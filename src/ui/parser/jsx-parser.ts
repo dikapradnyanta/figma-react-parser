@@ -16,7 +16,7 @@ import { parseInlineStyles } from './inline-style-parser';
     ]);
 
     function cleanCode(code) {
-      let cleaned = code.replace(/\/\/[^\n]*/g, '');
+      let cleaned = code.replace(/(?<!https?:)\/\/[^\n]*/g, '');
       cleaned = cleaned.replace(/\/\*[\s\S]*?\*\//g, '');
       return cleaned;
     }
