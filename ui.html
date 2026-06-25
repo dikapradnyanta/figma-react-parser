@@ -1,0 +1,792 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif;
+      background: #0D1117; color: #E6EDF3; padding: 18px;
+    }
+    h1 {
+      font-size: 17px; font-weight: 700;
+      background: linear-gradient(135deg, #4A90E2, #A78BFA);
+      -webkit-background-clip: text; background-clip: text;
+      -webkit-text-fill-color: transparent; margin-bottom: 4px;
+    }
+    p.subtitle { font-size: 11px; color: #8B949E; margin-bottom: 14px; }
+    #dropzone {
+      border: 2px dashed #30363D; border-radius: 12px;
+      padding: 28px 16px; text-align: center; cursor: pointer;
+      transition: all 0.2s ease; background: #161B22;
+    }
+    #dropzone:hover, #dropzone.hover { border-color: #4A90E2; background: rgba(74,144,226,0.07); }
+    #dropzone .icon { font-size: 28px; margin-bottom: 8px; }
+    #dropzone .main-text { font-size: 13px; font-weight: 600; color: #C9D1D9; margin-bottom: 4px; }
+    #dropzone .sub-text { font-size: 10px; color: #6E7681; }
+    #status-area { display: none; margin-top: 14px; background: #161B22; border-radius: 12px; padding: 14px; }
+    #status-area.visible { display: block; }
+    .progress-bg { width: 100%; height: 4px; background: #30363D; border-radius: 2px; margin: 8px 0; overflow: hidden; }
+    .progress-fill { height: 100%; background: linear-gradient(90deg, #4A90E2, #A78BFA); border-radius: 2px; transition: width 0.3s ease; width: 0%; }
+    .status-text { font-size: 11px; color: #8B949E; }
+    .log-area { margin-top: 8px; font-size: 10px; color: #6E7681; font-family: 'Courier New', monospace; max-height: 120px; overflow-y: auto; line-height: 1.7; }
+    .log-line { margin: 1px 0; }
+    .log-success { color: #3FB950; } .log-error { color: #F85149; } .log-info { color: #58A6FF; }
+    .features { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 14px; }
+    .badge { background: #1C2128; border: 1px solid #30363D; border-radius: 20px; padding: 3px 8px; font-size: 10px; color: #8B949E; }
+  </style>
+</head>
+<body>
+  <h1>⚡ React → Figma Parser v2</h1>
+  <p class="subtitle">Upload React/Next.js ZIP → auto-generate Figma screens dengan inline styles + Tailwind</p>
+
+  <div id="dropzone">
+    <div class="icon">📦</div>
+    <div class="main-text">Drop your React ZIP here</div>
+    <div class="sub-text">supports .tsx · .jsx · inline style · Tailwind · theme tokens</div>
+  </div>
+  <input type="file" id="fileInput" accept=".zip" style="display:none;">
+
+  <div id="status-area">
+    <div class="status-text" id="status-label">Starting...</div>
+    <div class="progress-bg"><div class="progress-fill" id="progress-bar"></div></div>
+    <div class="log-area" id="log-area"></div>
+  </div>
+
+  <div class="features">
+    <span class="badge">✓ Inline style={{}}</span>
+    <span class="badge">✓ Theme token resolver</span>
+    <span class="badge">✓ Tailwind Colors</span>
+    <span class="badge">✓ Auto-Layout</span>
+    <span class="badge">✓ Nested Nodes (AST)</span>
+    <span class="badge">✓ Icon Placeholders</span>
+    <span class="badge">✓ Shadow Effects</span>
+    <span class="badge">✓ Prototyping Links</span>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script>
+    // ── UI SETUP ──────────────────────────────────────────────
+    const dropzone   = document.getElementById('dropzone');
+    const fileInput  = document.getElementById('fileInput');
+    const statusArea = document.getElementById('status-area');
+    const statusLabel= document.getElementById('status-label');
+    const progressBar= document.getElementById('progress-bar');
+    const logArea    = document.getElementById('log-area');
+
+    function log(msg, type = 'info') {
+      const el = document.createElement('div');
+      el.className = `log-line log-${type}`;
+      el.textContent = msg;
+      logArea.appendChild(el);
+      logArea.scrollTop = logArea.scrollHeight;
+    }
+    function setProgress(pct, label) {
+      progressBar.style.width = pct + '%';
+      if (label) statusLabel.textContent = label;
+    }
+
+    dropzone.addEventListener('click', () => fileInput.click());
+    dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('hover'); });
+    dropzone.addEventListener('dragleave', () => dropzone.classList.remove('hover'));
+    dropzone.addEventListener('drop', e => {
+      e.preventDefault(); dropzone.classList.remove('hover');
+      if (e.dataTransfer.files.length) handleZip(e.dataTransfer.files[0]);
+    });
+    fileInput.addEventListener('change', e => { if (e.target.files.length) handleZip(e.target.files[0]); });
+
+    onmessage = (event) => {
+      const msg = event.data.pluginMessage;
+      if (!msg) return;
+      if (msg.type === 'status') {
+        if (msg.progress !== undefined) setProgress(msg.progress, msg.text);
+        log(msg.text, msg.isError ? 'error' : msg.done ? 'success' : 'info');
+      } else if (msg.type === 'log') {
+        log(msg.text, msg.logType || 'info');
+      }
+    };
+
+    // ══════════════════════════════════════════════════════════
+    // THEME RESOLVER
+    // Reads theme.ts/.js from ZIP and builds a flat token map:
+    // { "colors.primary": "#0D3B66", "radii.card": 16, ... }
+    // ══════════════════════════════════════════════════════════
+    function buildThemeMap(zipFiles) {
+      const tokenMap = {};
+
+      // Find theme file
+      const themeEntry = Object.entries(zipFiles).find(([name]) =>
+        /theme\.(ts|js|tsx)$/i.test(name) && !name.includes('node_modules')
+      );
+      if (!themeEntry) return tokenMap;
+
+      // We already have content as string (will be passed in)
+      return tokenMap; // filled below in async context
+    }
+
+    function parseThemeContent(content) {
+      const tokenMap = {};
+      if (!content) return tokenMap;
+
+      // Extract: export const colors = { primary: "#0D3B66", ... }
+      // Also handles: export const radii = { card: 16, ... }
+      const objectPattern = /export\s+const\s+(\w+)\s*=\s*\{([^}]+)\}/g;
+      let objMatch;
+      while ((objMatch = objectPattern.exec(content)) !== null) {
+        const objName = objMatch[1];
+        const objBody = objMatch[2];
+
+        // Parse key: value pairs
+        const kvPattern = /(\w+)\s*:\s*("([^"]+)"|'([^']+)'|`([^`]+)`|([\d.]+))/g;
+        let kvMatch;
+        while ((kvMatch = kvPattern.exec(objBody)) !== null) {
+          const key = kvMatch[1];
+          const val = kvMatch[3] || kvMatch[4] || kvMatch[5] ||
+                      (kvMatch[6] !== undefined ? parseFloat(kvMatch[6]) : undefined);
+          if (val !== undefined) {
+            tokenMap[`${objName}.${key}`] = val;
+          }
+        }
+      }
+
+      // Also handle: export const cardShadow = "..."
+      const constPattern = /export\s+const\s+(\w+)\s*=\s*("([^"]+)"|'([^']+)'|([\d.]+))/g;
+      let cMatch;
+      while ((cMatch = constPattern.exec(content)) !== null) {
+        const key = cMatch[1];
+        const val = cMatch[3] || cMatch[4] || (cMatch[5] !== undefined ? parseFloat(cMatch[5]) : undefined);
+        if (val !== undefined) {
+          tokenMap[key] = val;
+        }
+      }
+
+      return tokenMap;
+    }
+
+    // Apply theme token substitution to source code
+    // Replaces: colors.primary → "#0D3B66"
+    function applyThemeTokens(code, tokenMap) {
+      if (!tokenMap || Object.keys(tokenMap).length === 0) return code;
+
+      // Sort by length descending so longer keys match first
+      const keys = Object.keys(tokenMap).sort((a, b) => b.length - a.length);
+
+      for (const key of keys) {
+        const val = tokenMap[key];
+        const valStr = typeof val === 'number' ? String(val) : `"${val}"`;
+        // Replace occurrences like: colors.primary (not inside string literals ideally)
+        const escapedKey = key.replace(/\./g, '\\.').replace(/\[/g, '\\[').replace(/\]/g, '\\]');
+        code = code.replace(new RegExp(escapedKey, 'g'), valStr);
+      }
+      return code;
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // KNOWN LUCIDE / HERO ICON NAMES (treated as icon placeholders)
+    // ══════════════════════════════════════════════════════════
+    const ICON_NAMES = new Set([
+      'Bell','Search','BookText','Home','BookOpen','ClipboardList','MessagesSquare',
+      'Clock','ChevronLeft','ChevronRight','ArrowRight','ArrowLeft','FileQuestion',
+      'Star','Heart','Share','Plus','Minus','X','Check','Info','AlertCircle',
+      'User','Settings','Menu','Grid','List','Filter','Download','Upload',
+      'Phone','Mail','Map','Camera','Image','Video','Music','File','Folder',
+      'Edit','Trash','Copy','Clipboard','Lock','Unlock','Eye','EyeOff',
+      'Loader','RefreshCw','MoreHorizontal','MoreVertical','ChevronDown','ChevronUp',
+      'Send','Mic','Paperclip','Smile','Globe','Wifi','Battery','Bluetooth',
+      'Sun','Moon','Cloud','Zap','Gift','Tag','Bookmark','Flag','Award',
+      'TrendingUp','TrendingDown','BarChart','PieChart','Activity',
+      'ShoppingCart','ShoppingBag','CreditCard','DollarSign','Package',
+    ]);
+
+    // ── ZIP HANDLER ───────────────────────────────────────────
+    async function handleZip(file) {
+      statusArea.classList.add('visible');
+      logArea.innerHTML = '';
+      setProgress(5, 'Reading ZIP...');
+      log('📦 ' + file.name);
+
+      try {
+        const zip = await JSZip.loadAsync(file);
+
+        // ── Step 1: Build theme token map ──
+        setProgress(10, 'Reading design tokens...');
+        let tokenMap = {};
+        for (const [filename, entry] of Object.entries(zip.files)) {
+          if (entry.dir) continue;
+          if (/theme\.(ts|js|tsx)$/i.test(filename) && !filename.includes('node_modules')) {
+            const content = await entry.async('text');
+            tokenMap = parseThemeContent(content);
+            const count = Object.keys(tokenMap).length;
+            log(`🎨 Theme loaded: ${count} tokens from ${filename}`, 'success');
+            for (const [k, v] of Object.entries(tokenMap).slice(0, 6)) {
+              log(`   ${k} = ${v}`, 'info');
+            }
+            break;
+          }
+        }
+
+        // ── Step 2: Collect .tsx/.jsx files ──
+        const filesData = [];
+        setProgress(15, 'Scanning files...');
+        for (const [filename, entry] of Object.entries(zip.files)) {
+          if (entry.dir) continue;
+          if (filename.includes('node_modules')) continue;
+          const lname = filename.toLowerCase();
+          if (lname.endsWith('.tsx') || lname.endsWith('.jsx')) {
+            const rawContent = await entry.async('text');
+            // Apply theme token substitution before parsing
+            const content = applyThemeTokens(rawContent, tokenMap);
+            filesData.push({ filename, content });
+            log('✓ ' + filename, 'info');
+          }
+        }
+
+        if (!filesData.length) {
+          setProgress(0, '⚠️ No .tsx/.jsx files found');
+          log('No React files found!', 'error'); return;
+        }
+
+        setProgress(30, `Parsing ${filesData.length} React files...`);
+
+        // ── PASS 1: Parse ALL files into component map ──
+        const componentMap = {}; // name -> tree
+        const parsedFiles = [];
+
+        for (const f of filesData) {
+          try {
+            const comps = parseAllComponents(f.content);
+            if (comps.length > 0) {
+              for (const { name, tree } of comps) {
+                componentMap[name] = tree;
+                // Only push the first (main) component as the screen, or if it's explicitly a screen
+                // Actually, let's push ALL components to parsedFiles so they can be resolved.
+                parsedFiles.push({ filename: f.filename, name, tree });
+                log(`  ✓ parsed: ${name} (${countNodes(tree)} nodes)`, 'success');
+              }
+            } else {
+              log(`  ⚠ no JSX: ${f.filename.split('/').pop()}`, 'info');
+            }
+          } catch(e) {
+            log(`  ✗ error: ${f.filename.split('/').pop()}: ${e.message}`, 'error');
+          }
+        }
+
+        // ── PASS 2: Inline/resolve custom components ──
+        setProgress(50, 'Resolving components...');
+        for (const f of parsedFiles) {
+          resolveTree(f.tree, componentMap, new Set([f.name]));
+        }
+
+        // ── PASS 3: Select screens ──
+        // Skip wrapper/shell components
+        const SKIP_COMPONENTS = new Set(['App', 'PhoneFrame', 'BottomNav', 'Layout', 'Root', 'Provider', 'Router']);
+
+        // Priority: files in /screens/ path
+        let screens = parsedFiles.filter(f => {
+          if (SKIP_COMPONENTS.has(f.name)) return false;
+          const path = f.filename.toLowerCase();
+          return path.includes('/screens/') || path.includes('/pages/') || path.includes('/views/');
+        });
+
+        if (screens.length === 0) {
+          // Fallback: files with Screen/Page/View in name, excluding UI library and wrappers
+          screens = parsedFiles.filter(f => {
+            if (SKIP_COMPONENTS.has(f.name)) return false;
+            const path = f.filename.toLowerCase();
+            if (path.includes('/ui/') || path.includes('components/ui')) return false;
+            return /screen|page|view/i.test(f.name);
+          });
+        }
+
+        if (screens.length === 0) {
+          // Final fallback: everything except ui/ and small/wrapper files
+          screens = parsedFiles.filter(f => {
+            if (SKIP_COMPONENTS.has(f.name)) return false;
+            const path = f.filename.toLowerCase();
+            if (path.includes('/ui/') || path.includes('components/ui')) return false;
+            return countNodes(f.tree) >= 5;
+          }).sort((a, b) => countNodes(b.tree) - countNodes(a.tree)).slice(0, 8);
+        }
+
+        log(`✅ ${screens.length} screens from ${parsedFiles.length} files`, 'success');
+        screens.forEach(s => log(`  📱 ${s.name}`, 'success'));
+
+        setProgress(60, 'Sending to Figma...');
+        parent.postMessage({ pluginMessage: { type: 'parse-files', screens } }, '*');
+
+      } catch (err) {
+        setProgress(0, 'Error: ' + err.message);
+        log('Error: ' + err.message, 'error');
+        console.error(err);
+      }
+    }
+
+    // ── HELPER: count total nodes ──
+    function countNodes(node) {
+      if (!node) return 0;
+      return 1 + (node.children || []).reduce((s, c) => s + countNodes(c), 0);
+    }
+
+    // ── CODE CLEANER ──
+    function cleanCode(code) {
+      code = code.replace(/\/\/[^\n]*/g, '');
+      code = code.replace(/\/\*[\s\S]*?\*\//g, '');
+      code = code.replace(/^import\b[^\n]*\n?/gm, '');
+      return code;
+    }
+
+    // ── COMPONENT RESOLVER ──
+    function resolveTree(node, map, visited, depth = 0) {
+      if (!node || depth > 12) return;
+
+      const isCustom = /^[A-Z]/.test(node.tag);
+      // Skip known icon components
+      if (isCustom && ICON_NAMES.has(node.tag)) {
+        node.isIcon = true;
+        return;
+      }
+
+      if (isCustom && !visited.has(node.tag)) {
+        const def = map[node.tag];
+        if (def) {
+          const clone = JSON.parse(JSON.stringify(def));
+          node.tag = clone.tag;
+          node.classes = [...new Set([...clone.classes, ...node.classes])];
+          node.text = node.text || clone.text || '';
+          node.children = [...clone.children, ...node.children];
+          node.attrs = { ...clone.attrs, ...node.attrs };
+          // Merge inlineStyle
+          node.inlineStyle = { ...(clone.inlineStyle || {}), ...(node.inlineStyle || {}) };
+          const newVisited = new Set([...visited, node.tag]);
+          resolveTree(node, map, newVisited, depth + 1);
+          return;
+        }
+      }
+
+      for (const child of node.children) {
+        resolveTree(child, map, visited, depth + 1);
+      }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // INLINE STYLE PARSER
+    // Parses style={{ key: value, ... }} from JSX
+    // Returns a flat object of CSS-like properties
+    // ═══════════════════════════════════════════════════════════
+    function parseInlineStyleStr(str) {
+      // str is the content inside style={{ ... }}
+      // After theme token substitution, values should be literals like "16" or '"#0D3B66"'
+      const style = {};
+      if (!str) return style;
+
+      // Remove outer {{ }} if present
+      str = str.trim();
+      if (str.startsWith('{')) str = str.slice(1);
+      if (str.endsWith('}')) str = str.slice(0, -1);
+
+      // Parse key: value pairs
+      // Handles: key: "string", key: 123, key: `template`, key: `${expr}`, key: "val" + "val"
+      const kvRe = /([a-zA-Z]+[a-zA-Z0-9]*)\s*:\s*/g;
+      let match;
+      const positions = [];
+      while ((match = kvRe.exec(str)) !== null) {
+        positions.push({ key: match[1], start: match.index + match[0].length, keyEnd: match.index });
+      }
+
+      for (let i = 0; i < positions.length; i++) {
+        const { key, start } = positions[i];
+        const end = i + 1 < positions.length ? positions[i + 1].keyEnd : str.length;
+        let rawVal = str.slice(start, end).trim().replace(/,\s*$/, '').trim();
+
+        // Extract the value
+        let val = extractStyleValue(rawVal);
+        if (val !== null && val !== undefined) {
+          // Convert camelCase CSS key  
+          style[key] = val;
+        }
+      }
+
+      return style;
+    }
+
+    function extractStyleValue(raw) {
+      if (!raw) return null;
+      raw = raw.trim();
+
+      // Quoted string: "..." or '...'
+      if ((raw.startsWith('"') && raw.endsWith('"')) ||
+          (raw.startsWith("'") && raw.endsWith("'"))) {
+        return raw.slice(1, -1);
+      }
+      // Template literal: `...`
+      if (raw.startsWith('`') && raw.endsWith('`')) {
+        return raw.slice(1, -1).replace(/\$\{[^}]+\}/g, '??');
+      }
+      // Pure number
+      if (/^-?[\d.]+$/.test(raw)) return parseFloat(raw);
+      // Expression with + concatenation like "1px solid " + "#EEF1F5"
+      if (raw.includes('+')) {
+        const parts = raw.split('+').map(p => {
+          p = p.trim();
+          if ((p.startsWith('"') && p.endsWith('"')) || (p.startsWith("'") && p.endsWith("'"))) return p.slice(1,-1);
+          return p;
+        });
+        return parts.join('');
+      }
+      // rgba()/rgb() function
+      if (/^rgba?\(/.test(raw)) return raw;
+      // Already resolved hex or named color  
+      if (/^#[0-9a-fA-F]+$/.test(raw)) return raw;
+      // Number with px unit
+      if (/^[\d.]+px$/.test(raw)) return parseFloat(raw);
+      // 999 (border radius shorthand)
+      if (/^\d+$/.test(raw)) return parseInt(raw);
+
+      return null;
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // CORE JSX PARSER
+    // ═══════════════════════════════════════════════════════════
+    function parseAllComponents(code) {
+      const src = cleanCode(code);
+      const components = [];
+      
+      const pattern = /(?:(?:export\s+(?:default\s+)?)?(?:async\s+)?function|(?:export\s+)?const)\s+([A-Z][a-zA-Z0-9_]*)\s*(?:=\s*(?:async\s+)?(?:\([^\)]*\)|[a-zA-Z0-9_]+)\s*=>|\([^\)]*\))/g;
+      
+      let match;
+      const matches = [];
+      while ((match = pattern.exec(src)) !== null) {
+        matches.push({ name: match[1], index: match.index });
+      }
+      
+      for (let i = 0; i < matches.length; i++) {
+        const current = matches[i];
+        const nextIdx = i + 1 < matches.length ? matches[i+1].index : src.length;
+        const block = src.slice(current.index, nextIdx);
+        
+        const m = block.match(/(?:return|=>)\s*[\(\s]*(<[a-zA-Z<\/])/);
+        if (m) {
+          const startIdx = current.index + m.index + m[0].length - m[1].length;
+          try {
+            const parser = new JSXParser(src, startIdx);
+            const result = parser.parseElement();
+            if (result) components.push({ name: current.name, tree: result });
+          } catch(e) {}
+        }
+      }
+      return components;
+    }
+
+    class JSXParser {
+      constructor(src, pos = 0) {
+        this.src = src;
+        this.pos = pos;
+      }
+
+      skipWS() {
+        while (this.pos < this.src.length && /\s/.test(this.src[this.pos])) this.pos++;
+      }
+
+      skipExprAndExtractJSX() {
+        if (this.src[this.pos] !== '{') return [];
+        this.pos++;
+        let depth = 1;
+        let jsxChildren = [];
+
+        while (this.pos < this.src.length && depth > 0) {
+          const ch = this.src[this.pos];
+          if (ch === '{') { depth++; this.pos++; continue; }
+          if (ch === '}') {
+            depth--;
+            if (depth === 0) { this.pos++; break; }
+            this.pos++; continue;
+          }
+          if (ch === '"' || ch === "'" || ch === '`') {
+            const q = ch; this.pos++;
+            while (this.pos < this.src.length) {
+              const c2 = this.src[this.pos];
+              this.pos++;
+              if (c2 === '\\') { this.pos++; continue; }
+              if (c2 === q) break;
+            }
+            continue;
+          }
+          if (ch === '<') {
+            const next = this.src[this.pos + 1];
+            if (/[a-zA-Z\/!]/.test(next)) {
+              const savedPos = this.pos;
+              try {
+                const child = this.parseElement();
+                if (child) { jsxChildren.push(child); continue; }
+              } catch (_) {}
+              this.pos = savedPos;
+            }
+          }
+          this.pos++;
+        }
+        return jsxChildren;
+      }
+
+      readTagName() {
+        const s = this.pos;
+        while (this.pos < this.src.length && /[a-zA-Z0-9_\-\.]/.test(this.src[this.pos])) this.pos++;
+        return this.src.slice(s, this.pos);
+      }
+
+      // Read the raw string content of an attribute value (for style={{}})
+      readAttrValueRaw() {
+        const ch = this.src[this.pos];
+        if (ch === '"' || ch === "'") {
+          const q = ch; this.pos++;
+          const s = this.pos;
+          while (this.pos < this.src.length && this.src[this.pos] !== q) this.pos++;
+          const v = this.src.slice(s, this.pos);
+          this.pos++;
+          return { type: 'string', value: v };
+        }
+        if (ch === '{') {
+          this.pos++;
+          let depth = 1;
+          const start = this.pos;
+          while (this.pos < this.src.length && depth > 0) {
+            const c = this.src[this.pos];
+            if (c === '{') depth++;
+            else if (c === '}') { depth--; if (depth === 0) { this.pos++; break; } }
+            else if (c === '"' || c === "'" || c === '`') {
+              const q = c; this.pos++;
+              while (this.pos < this.src.length) {
+                const c2 = this.src[this.pos++];
+                if (c2 === '\\') { this.pos++; continue; }
+                if (c2 === q) break;
+              }
+              continue;
+            }
+            this.pos++;
+          }
+          return { type: 'expr', value: this.src.slice(start, this.pos - 1) };
+        }
+        return { type: 'string', value: '' };
+      }
+
+      readAttrValue() {
+        const raw = this.readAttrValueRaw();
+        if (raw.type === 'string') return raw.value;
+        // For expr, try to extract string literals
+        const expr = raw.value;
+        const strLits = [];
+        const re = /['"`]([^'"`]+)['"`]/g;
+        let m;
+        while ((m = re.exec(expr)) !== null) strLits.push(m[1]);
+        return strLits.length > 0 ? strLits.join(' ') : expr.trim().replace(/[^a-zA-Z0-9\s\-_]/g, ' ').trim();
+      }
+
+      readAttrs() {
+        const attrs = {};
+        let styleRaw = null;
+
+        while (this.pos < this.src.length) {
+          this.skipWS();
+          const ch = this.src[this.pos];
+          if (ch === '>' || ch === '/') break;
+          if (this.pos >= this.src.length) break;
+
+          const ns = this.pos;
+          while (this.pos < this.src.length && !/[\s=>/\n{]/.test(this.src[this.pos])) this.pos++;
+          const name = this.src.slice(ns, this.pos).trim();
+          if (!name) { this.pos++; continue; }
+
+          this.skipWS();
+          if (this.src[this.pos] === '=') {
+            this.pos++;
+            this.skipWS();
+
+            // Special handling for style={{ }}
+            if (name === 'style' && this.src[this.pos] === '{') {
+              // Read outer { of style={
+              this.pos++;
+              this.skipWS();
+              // Now read inner { of {{
+              if (this.src[this.pos] === '{') {
+                let depth = 1; this.pos++;
+                const start = this.pos;
+                while (this.pos < this.src.length && depth > 0) {
+                  const c = this.src[this.pos];
+                  if (c === '{') depth++;
+                  else if (c === '}') { depth--; if (depth === 0) break; }
+                  else if (c === '"' || c === "'" || c === '`') {
+                    const q = c; this.pos++;
+                    while (this.pos < this.src.length) {
+                      const c2 = this.src[this.pos++];
+                      if (c2 === '\\') { this.pos++; continue; }
+                      if (c2 === q) break;
+                    }
+                    continue;
+                  }
+                  this.pos++;
+                }
+                styleRaw = this.src.slice(start, this.pos);
+                this.pos++; // closing }
+                this.skipWS();
+                if (this.src[this.pos] === '}') this.pos++; // closing outer }
+              } else {
+                // style={ expr } without double brace
+                let depth = 1;
+                const start = this.pos;
+                while (this.pos < this.src.length && depth > 0) {
+                  const c = this.src[this.pos];
+                  if (c === '{') depth++;
+                  else if (c === '}') { depth--; if (depth === 0) break; }
+                  this.pos++;
+                }
+                styleRaw = this.src.slice(start, this.pos);
+                this.pos++;
+              }
+            } else {
+              attrs[name] = this.readAttrValue();
+            }
+          } else if (this.src[this.pos] === '{') {
+            this.skipExprAndExtractJSX();
+          } else {
+            attrs[name] = 'true';
+          }
+        }
+
+        // Parse styleRaw into inlineStyle object
+        if (styleRaw) {
+          attrs['__inlineStyle'] = parseInlineStyleStr(styleRaw);
+        }
+
+        return attrs;
+      }
+
+      parseElement() {
+        this.skipWS();
+        if (this.pos >= this.src.length || this.src[this.pos] !== '<') return null;
+        if (this.src[this.pos + 1] === '/') return null;
+        if (this.src.startsWith('<!--', this.pos)) {
+          const end = this.src.indexOf('-->', this.pos);
+          this.pos = end !== -1 ? end + 3 : this.src.length;
+          return null;
+        }
+        if (this.src[this.pos + 1] === '>') {
+          this.pos += 2;
+          const children = this.parseChildren('');
+          return this.makeNode('div', {}, children, '');
+        }
+
+        this.pos++;
+        this.skipWS();
+        const tag = this.readTagName();
+        if (!tag) { this.pos--; return null; }
+
+        const attrs = this.readAttrs();
+        this.skipWS();
+
+        if (this.src[this.pos] === '/') {
+          this.pos += 2;
+          return this.makeNode(tag, attrs, [], '');
+        }
+        if (this.src[this.pos] !== '>') return null;
+        this.pos++;
+
+        if (tag === 'script' || tag === 'style') {
+          const ct = `</${tag}>`;
+          const ci = this.src.indexOf(ct, this.pos);
+          this.pos = ci !== -1 ? ci + ct.length : this.src.length;
+          return null;
+        }
+
+        const children = this.parseChildren(tag);
+        return this.makeNode(tag, attrs, children, '');
+      }
+
+      parseChildren(parentTag) {
+        const children = [];
+        let safetyLimit = 2000;
+
+        while (this.pos < this.src.length && safetyLimit-- > 0) {
+          const ch = this.src[this.pos];
+
+          if (ch === '<') {
+            if (this.src[this.pos + 1] === '/') {
+              while (this.pos < this.src.length && this.src[this.pos] !== '>') this.pos++;
+              this.pos++;
+              break;
+            }
+            if (this.src[this.pos + 1] === '>' && parentTag === '') {
+              this.pos += 2; break;
+            }
+            const savedPos = this.pos;
+            const child = this.parseElement();
+            if (child) {
+              children.push(child);
+            } else if (this.pos === savedPos) {
+              this.pos++;
+            }
+          } else if (ch === '{') {
+            const innerJSX = this.skipExprAndExtractJSX();
+            for (const n of innerJSX) children.push(n);
+          } else {
+            const s = this.pos;
+            while (this.pos < this.src.length && this.src[this.pos] !== '<' && this.src[this.pos] !== '{') {
+              this.pos++;
+            }
+            const rawText = this.src.slice(s, this.pos).trim();
+            if (rawText && !/\b(function|const|let|export)\b/.test(rawText)) {
+              if (children.length > 0 && children[children.length - 1]._textOnly) {
+                children[children.length - 1].text += ' ' + rawText;
+              } else if (rawText.length > 0 && rawText.length < 500) {
+                children.push({ tag: '_text', classes: [], text: rawText, attrs: {}, children: [], _textOnly: true });
+              }
+            }
+          }
+        }
+        return children;
+      }
+
+      makeNode(tag, attrs, children, text) {
+        const classStr = attrs['className'] || attrs['class'] || '';
+        const classes = classStr
+          .split(/\s+/)
+          .map(c => c.trim())
+          .filter(c => c.length > 0 && !/[(){},]/.test(c));
+
+        const inlineStyle = attrs['__inlineStyle'] || {};
+
+        const cleanAttrs = {};
+        for (const [k, v] of Object.entries(attrs)) {
+          if (k !== 'className' && k !== 'class' && k !== '__inlineStyle') cleanAttrs[k] = v;
+        }
+
+        if (tag === '_text') {
+          return { tag: 'span', classes: [], text, attrs: {}, children: [], inlineStyle: {} };
+        }
+
+        // Check if this is a known icon
+        const isIcon = ICON_NAMES.has(tag);
+
+        let inlineText = text || '';
+        const realChildren = [];
+        for (const child of children) {
+          if (child._textOnly || child.tag === '_text') {
+            inlineText += (inlineText ? ' ' : '') + child.text;
+          } else {
+            realChildren.push(child);
+          }
+        }
+
+        return {
+          tag,
+          classes,
+          text: inlineText.trim(),
+          attrs: cleanAttrs,
+          children: realChildren,
+          inlineStyle,
+          isIcon,
+        };
+      }
+    }
+  </script>
+</body>
+</html>

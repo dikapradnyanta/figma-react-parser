@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+    "target": "es2018",
+    "lib": ["es2018"],
+    "strict": true,
+    "typeRoots": ["./node_modules/@types", "./node_modules/@figma"],
+    "noEmitOnError": false
+  },
+  "files": ["code.ts"]
+}
