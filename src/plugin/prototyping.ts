@@ -48,7 +48,7 @@ export async function addPrototyping(frames: FrameNode[]): Promise<void> {
               destinationId: targetFrame.id,
               navigation: 'NAVIGATE',
               transition: {
-                type: 'DISSOLVE',
+                type: 'SMART_ANIMATE',
                 duration: 0.3,
                 easing: { type: 'EASE_IN_AND_OUT' }
               }

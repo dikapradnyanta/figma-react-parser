@@ -1,5 +1,8 @@
+import JSZip from 'jszip';
 import { parseThemeContent, applyThemeTokens } from './parser/theme-resolver';
 import { parseAllComponents, ICON_NAMES } from './parser/jsx-parser';
+import { countNodes, resolveTree } from './parser/inline-style-parser';
+import type { ParsedScreen, ComponentNode as ParsedComponentNode } from '../plugin/types';
 
 import './style.css';
 
@@ -27,11 +30,48 @@ import './style.css';
     if (copyLogBtn) {
       copyLogBtn.addEventListener('click', () => {
         const text = logArea.innerText;
-        navigator.clipboard.writeText(text).then(() => {
+        // Use textarea and execCommand for Figma UI sandbox compatibility
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.style.position = 'absolute';
+        textarea.style.left = '-9999px';
+        document.body.appendChild(textarea);
+        textarea.select();
+        try {
+          document.execCommand('copy');
           const originalHTML = copyLogBtn.innerHTML;
-          copyLogBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+          copyLogBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#14ae5c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
           setTimeout(() => copyLogBtn.innerHTML = originalHTML, 1500);
-        });
+        } catch (err) {
+          console.error('Copy failed', err);
+        } finally {
+          document.body.removeChild(textarea);
+        }
+      });
+    }
+
+    let lastParsedAST: any = null;
+    const copyAstBtn = document.getElementById('copy-ast-btn');
+    if (copyAstBtn) {
+      copyAstBtn.addEventListener('click', () => {
+        if (!lastParsedAST) return;
+        const text = JSON.stringify(lastParsedAST, null, 2);
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.style.position = 'absolute';
+        textarea.style.left = '-9999px';
+        document.body.appendChild(textarea);
+        textarea.select();
+        try {
+          document.execCommand('copy');
+          const originalHTML = copyAstBtn.innerHTML;
+          copyAstBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#14ae5c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+          setTimeout(() => copyAstBtn.innerHTML = originalHTML, 1500);
+        } catch (err) {
+          console.error('Copy AST failed', err);
+        } finally {
+          document.body.removeChild(textarea);
+        }
       });
     }
 
@@ -64,6 +104,12 @@ import './style.css';
       logArea.innerHTML = '';
       setProgress(5, 'Reading ZIP...');
       log('📦 ' + file.name);
+      
+      const minNodeInput = document.getElementById('minNodeInput') as HTMLInputElement;
+      const minNodeCount = minNodeInput ? parseInt(minNodeInput.value, 10) || 5 : 5;
+      
+      const frameTemplateSelect = document.getElementById('frameTemplateSelect') as HTMLSelectElement;
+      const frameTemplate = frameTemplateSelect ? frameTemplateSelect.value : '375x812';
 
       try {
         const zip = await JSZip.loadAsync(file);
@@ -109,25 +155,25 @@ import './style.css';
         setProgress(30, `Parsing ${filesData.length} React files...`);
 
         // ── PASS 1: Parse ALL files into component map ──
-        const componentMap = {}; // name -> tree
-        const parsedFiles = [];
+        const componentMap: Record<string, ParsedComponentNode> = {}; // name -> tree
+        const parsedFiles: ParsedScreen[] = [];
 
         for (const f of filesData) {
           try {
-            const comps = parseAllComponents(f.content);
+            const comps = parseAllComponents(f.content, f.filename);
             if (comps.length > 0) {
-              for (const { name, tree } of comps) {
+              for (const { name, tree, isDefaultExport } of comps) {
                 componentMap[name] = tree;
                 // Only push the first (main) component as the screen, or if it's explicitly a screen
                 // Actually, let's push ALL components to parsedFiles so they can be resolved.
-                parsedFiles.push({ filename: f.filename, name, tree });
+                parsedFiles.push({ filename: f.filename, name, tree, isDefaultExport });
                 log(`  ✓ parsed: ${name} (${countNodes(tree)} nodes)`, 'success');
               }
             } else {
               log(`  ⚠ no JSX: ${f.filename.split('/').pop()}`, 'info');
             }
           } catch(e) {
-            log(`  ✗ error: ${f.filename.split('/').pop()}: ${e.message}`, 'error');
+            log(`  ⚠ Error parsing ${f.filename}: ${e.message}`, 'error');
           }
         }
 
@@ -137,21 +183,37 @@ import './style.css';
           resolveTree(f.tree, componentMap, new Set([f.name]));
         }
 
-        // ── PASS 3: Select screens ──
+        // ── PASS 3: Determine Screens vs Components ──
         // Skip wrapper/shell components
-        const SKIP_COMPONENTS = new Set(['App', 'PhoneFrame', 'BottomNav', 'Layout', 'Root', 'Provider', 'Router']);
+        const SKIP_COMPONENTS = new Set(['BottomNav', 'Provider', 'Router', 'Root', 'Layout']);
 
-        // Priority: files in pages/screens/views, or named Screen/Page/View, or have >= 15 nodes
+        // Priority: files in pages/screens/views/app, or named Screen/Page/View/App, or have >= 15 nodes
         let screens = parsedFiles.filter(f => {
           if (SKIP_COMPONENTS.has(f.name)) return false;
+          
+          const nodes = countNodes(f.tree);
+          // 1. Force skip if it's too small (not enough nodes to be a real screen)
+          // Exception: if there is only 1 file parsed, let it be the screen anyway.
+          if (parsedFiles.length > 1 && nodes < minNodeCount) return false;
+          
           const path = f.filename.toLowerCase();
+          
           // Skip UI library components
           if (path.includes('/ui/') || path.includes('components/ui')) return false;
+
+          // Explicitly defined pages (only if they are the default export)
+          if ((path.endsWith('page.tsx') || path.endsWith('page.jsx')) && f.isDefaultExport) return true;
+          if ((path.endsWith('app.tsx') || path.endsWith('app.jsx')) && f.isDefaultExport) return true;
+          if ((path.endsWith('index.tsx') || path.endsWith('index.jsx')) && f.isDefaultExport) return true;
+
+          // Directory based (pages/ screens/ views/)
+          if ((path.includes('/pages/') || path.includes('/screens/') || path.includes('/views/')) && f.isDefaultExport) return true;
           
-          if (path.includes('/pages/') || path.includes('/screens/') || path.includes('/views/')) return true;
-          if (/screen|page|view/i.test(f.name)) return true;
+          // Component name based
+          if (/screen|page|view|app|home|dashboard|login|register|layout|main/i.test(f.name) && f.isDefaultExport) return true;
+          
           // Substantial components are treated as screens
-          if (countNodes(f.tree) >= 15) return true;
+          if (nodes >= Math.max(12, minNodeCount * 2) && f.isDefaultExport) return true;
           
           return false;
         });
@@ -171,12 +233,44 @@ import './style.css';
         // Extract components (non-screens)
         const components = parsedFiles.filter(f => !screens.includes(f) && !SKIP_COMPONENTS.has(f.name));
 
+        // Pre-process components for Interactive Variants
+        components.forEach(comp => {
+          const hasHover = (node: any): boolean => {
+            if (node.rawClassName && node.rawClassName.some((c: string) => c.startsWith('hover:'))) return true;
+            if (node.children) return node.children.some(hasHover);
+            return false;
+          };
+
+          if (hasHover(comp.tree)) {
+            const hoverTree = JSON.parse(JSON.stringify(comp.tree));
+            const applyHover = (node: any) => {
+              if (node.rawClassName) {
+                const hoverClasses = node.rawClassName
+                  .filter((c: string) => c.startsWith('hover:'))
+                  .map((c: string) => c.replace('hover:', ''));
+                if (hoverClasses.length > 0) {
+                  // Append to override previous classes
+                  node.rawClassName = [...node.rawClassName, ...hoverClasses];
+                }
+              }
+              if (node.children) node.children.forEach(applyHover);
+            };
+            applyHover(hoverTree);
+            comp.variants = { Hover: hoverTree };
+            log(`  ✨ Added Hover variant to ${comp.name}`, 'info');
+          }
+        });
+
         log(`✅ ${screens.length} screens, ${components.length} components`, 'success');
         screens.forEach(s => log(`  📱 ${s.name}`, 'success'));
         components.forEach(c => log(`  🧩 ${c.name}`, 'info'));
 
         setProgress(60, 'Sending to Figma...');
-        parent.postMessage({ pluginMessage: { type: 'parse-files', screens, components, tokens: tokenMap } }, '*');
+        
+        lastParsedAST = { screens, components, tokens: tokenMap, frameTemplate };
+        if (copyAstBtn) copyAstBtn.style.display = 'block';
+
+        parent.postMessage({ pluginMessage: { type: 'parse-files', screens, components, tokens: tokenMap, frameTemplate } }, '*');
 
       } catch (err) {
         setProgress(0, 'Error: ' + err.message);
@@ -205,8 +299,6 @@ import './style.css';
         console.log('[ui.html] Detected dynamic lucide-react icons:', Array.from(dynamicIcons));
       }
 
-      code = code.replace(/\/\/[^\n]*/g, '');
-      code = code.replace(/\/\*[\s\S]*?\*\//g, '');
       code = code.replace(/^import\b[^\n]*\n?/gm, '');
       return code;
     }
@@ -215,18 +307,18 @@ import './style.css';
     function resolveTree(node, map, visited, depth = 0) {
       if (!node || depth > 12) return;
 
-      const isCustom = /^[A-Z]/.test(node.tag);
+      const isCustom = /^[A-Z]/.test(node.originalTag);
       // Skip known icon components
-      if (isCustom && (ICON_NAMES.has(node.tag) || dynamicIcons.has(node.tag))) {
+      if (isCustom && (ICON_NAMES.has(node.originalTag) || dynamicIcons.has(node.originalTag))) {
         node.isIcon = true;
         return;
       }
 
-      if (isCustom && !visited.has(node.tag)) {
+      if (isCustom && !visited.has(node.originalTag)) {
         // Tag is a known component. Instead of inlining, mark it so plugin creates an instance.
-        const def = map[node.tag];
+        const def = map[node.originalTag];
         if (def) {
-          // We don't inline anymore. We keep node.tag as "CourseCard"
+          // We don't inline anymore. We keep node.originalTag as "CourseCard"
           // We still resolve children in case they have custom tags.
           for (const child of node.children || []) resolveTree(child, map, visited, depth + 1);
           return;

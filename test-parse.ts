@@ -1,1 +1,0 @@
-import { parseJSX } from './src/ui/parser/jsx-parser'; import fs from 'fs'; const code = fs.readFileSync('prototype_source/src/app/components/screens/home-screen.tsx', 'utf8'); const tree = parseJSX(code); console.log(JSON.stringify(tree, null, 2));

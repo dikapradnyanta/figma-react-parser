@@ -15,18 +15,10 @@ export const ICON_NAMES = new Set([
   'ShoppingCart','ShoppingBag','CreditCard','DollarSign','Package',
 ]);
 
-export interface ParsedNode {
-  tag: string;
-  classes: string[];
-  inlineStyle?: Record<string, string | number>;
-  text?: string;
-  attrs?: Record<string, string>;
-  actionTo?: string;
-  children: ParsedNode[];
-  isExpression?: boolean;
-}
+import { ComponentNode } from '../../plugin/types';
 
-export function parseAllComponents(code: string): { name: string, tree: ParsedNode }[] {
+
+export function parseAllComponents(code: string, filename?: string): { name: string, tree: ComponentNode, isDefaultExport?: boolean }[] {
   let ast;
   try {
     ast = parse(code, {
@@ -38,13 +30,20 @@ export function parseAllComponents(code: string): { name: string, tree: ParsedNo
     return [];
   }
 
-  const components: { name: string, node: any }[] = [];
+  const components: { name: string, node: any, isDefaultExport?: boolean }[] = [];
 
   for (const node of ast.program.body) {
     if (node.type === 'ExportDefaultDeclaration') {
       const decl = node.declaration;
       if (decl.type === 'FunctionDeclaration' && decl.id) {
-        components.push({ name: decl.id.name, node: decl });
+        components.push({ name: decl.id.name, node: decl, isDefaultExport: true });
+      } else if (decl.type === 'FunctionDeclaration' || decl.type === 'ArrowFunctionExpression') {
+        let name = 'UnknownComponent';
+        if (filename) {
+          const base = filename.split('/').pop()?.replace(/\.[^/.]+$/, "") || "";
+          name = base.split(/[-_]/).map(p => p.charAt(0).toUpperCase() + p.slice(1)).join('');
+        }
+        components.push({ name, node: decl, isDefaultExport: true });
       }
     } else if (node.type === 'ExportNamedDeclaration') {
       const decl = node.declaration;
@@ -68,7 +67,7 @@ export function parseAllComponents(code: string): { name: string, tree: ParsedNo
     }
   }
 
-  const parsedComponents: { name: string, tree: ParsedNode }[] = [];
+  const parsedComponents: { name: string, tree: ComponentNode, isDefaultExport?: boolean }[] = [];
   for (const comp of components) {
     const jsx = findJSX(comp.node);
     if (jsx) {
@@ -78,10 +77,11 @@ export function parseAllComponents(code: string): { name: string, tree: ParsedNo
           // If the root is a fragment, wrap it in a div
           parsedComponents.push({
             name: comp.name,
-            tree: { tag: 'div', classes: [], children: tree as ParsedNode[] }
+            tree: { type: 'group', originalTag: 'div', rawClassName: [], props: {}, children: tree as ComponentNode[] },
+            isDefaultExport: comp.isDefaultExport
           });
         } else {
-          parsedComponents.push({ name: comp.name, tree: tree as ParsedNode });
+          parsedComponents.push({ name: comp.name, tree: tree as ComponentNode, isDefaultExport: comp.isDefaultExport });
         }
       }
     }
@@ -97,8 +97,12 @@ function findJSX(node: any): any {
     return findJSX(node.argument);
   }
   if (node.type === 'BlockStatement') {
+    const returnStmts = node.body.filter((stmt: any) => stmt.type === 'ReturnStatement');
+    if (returnStmts.length > 0) {
+      // Ambil return yang paling terakhir (struktur utama UI)
+      return findJSX(returnStmts[returnStmts.length - 1]);
+    }
     for (const stmt of node.body) {
-      if (stmt.type === 'ReturnStatement') return findJSX(stmt);
       if (stmt.type === 'IfStatement') {
         const branch = findJSX(stmt.consequent) || (stmt.alternate ? findJSX(stmt.alternate) : null);
         if (branch) return branch;
@@ -138,7 +142,7 @@ function extractASTStyleValue(node: any): string | number | null {
   return null;
 }
 
-function parseJSX(node: any): ParsedNode | ParsedNode[] | null {
+function parseJSX(node: any): ComponentNode | ComponentNode[] | null {
   if (node.type === 'JSXElement') {
     const opening = node.openingElement;
     let tag = '';
@@ -199,12 +203,10 @@ function parseJSX(node: any): ParsedNode | ParsedNode[] | null {
                  }
                }
                if (callExpr && callExpr.type === 'CallExpression') {
-                 if (callExpr.callee.type === 'Identifier' && (callExpr.callee.name === 'navigate' || callExpr.callee.name === 'router.push' || callExpr.callee.name === 'push')) {
-                    if (callExpr.arguments.length > 0) {
-                       const arg = callExpr.arguments[0];
-                       if (arg.type === 'StringLiteral') {
-                         actionTo = arg.value;
-                       }
+                 if (callExpr.arguments.length > 0) {
+                    const arg = callExpr.arguments[0];
+                    if (arg.type === 'StringLiteral') {
+                      actionTo = arg.value;
                     }
                  }
                }
@@ -222,7 +224,7 @@ function parseJSX(node: any): ParsedNode | ParsedNode[] | null {
       }
     }
 
-    const children: ParsedNode[] = [];
+    const children: ComponentNode[] = [];
     for (const child of node.children) {
       const parsedChild = parseJSX(child);
       if (parsedChild) {
@@ -234,11 +236,20 @@ function parseJSX(node: any): ParsedNode | ParsedNode[] | null {
       }
     }
 
-    return { tag, classes, inlineStyle, attrs, actionTo, children };
+    const props: Record<string, any> = { ...attrs };
+    if (actionTo) props.actionTo = actionTo;
+    
+    let type: 'frame' | 'text' | 'image' | 'group' = 'frame';
+    const tLower = tag.toLowerCase();
+    const textTags = ['p','span','h1','h2','h3','h4','h5','h6','label','strong','em','small','a','li','td','th','caption','figcaption','legend','blockquote','time','code','pre','mark','b','i','u','abbr','cite','dt','dd'];
+    if (textTags.includes(tLower)) type = 'text';
+    else if (['img', 'image', 'video', 'figure'].includes(tLower)) type = 'image';
+
+    return { type, originalTag: tag, rawClassName: classes, rawInlineStyle: inlineStyle, props, children };
   } else if (node.type === 'JSXText') {
     const text = node.value.replace(/[\n\r]+\s*/g, ' ').trim();
     if (text) {
-      return { tag: 'span', classes: [], text, children: [] };
+      return { type: 'text', originalTag: 'span', rawClassName: [], props: {}, text, children: [] };
     }
   } else if (node.type === 'JSXExpressionContainer') {
     if (node.expression.type === 'CallExpression') {
@@ -265,10 +276,10 @@ function parseJSX(node: any): ParsedNode | ParsedNode[] | null {
       const consequent = parseJSX(node.expression.consequent);
       if (consequent) return consequent;
     } else if (node.expression.type === 'StringLiteral' || node.expression.type === 'NumericLiteral') {
-      return { tag: 'span', classes: [], text: String(node.expression.value), children: [] };
+      return { type: 'text', originalTag: 'span', rawClassName: [], props: {}, text: String(node.expression.value), children: [] };
     }
   } else if (node.type === 'JSXFragment') {
-    const children: ParsedNode[] = [];
+    const children: ComponentNode[] = [];
     for (const child of node.children) {
       const parsedChild = parseJSX(child);
       if (parsedChild) {

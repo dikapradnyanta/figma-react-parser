@@ -21,6 +21,7 @@
   "dependencies": {
     "@babel/parser": "^8.0.0",
     "@babel/traverse": "^8.0.0",
-    "@babel/types": "^8.0.0"
+    "@babel/types": "^8.0.0",
+    "jszip": "^3.10.1"
   }
 }

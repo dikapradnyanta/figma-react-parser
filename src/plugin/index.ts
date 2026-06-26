@@ -72,25 +72,71 @@ figma.ui.onmessage = async (msg) => {
       componentSection.resize(500, Math.max(812, componentsList.length * 200 + 100));
 
       let currentCompY = 50;
-      for (const comp of componentsList) {
+      for (const comp of componentsList as any[]) {
         if (!comp.tree) continue;
-        const compNode = figma.createComponent();
-        compNode.name = comp.name;
-        // Basic Auto Layout for component container
-        compNode.layoutMode = 'VERTICAL';
-        compNode.layoutSizingHorizontal = 'HUG';
-        compNode.layoutSizingVertical = 'HUG';
-        compNode.fills = []; // transparent root
 
-        // Build the tree inside the component
-        await buildNode(comp.tree, compNode, componentRegistry, 0);
+        if (comp.variants && Object.keys(comp.variants).length > 0) {
+          // HAS VARIANTS
+          const defaultComp = figma.createComponent();
+          defaultComp.name = "Property 1=Default";
+          defaultComp.layoutMode = 'VERTICAL';
+          defaultComp.layoutSizingHorizontal = 'HUG';
+          defaultComp.layoutSizingVertical = 'HUG';
+          defaultComp.fills = [];
+          await buildNode(comp.tree, defaultComp, componentRegistry, 0);
 
-        compNode.x = 50;
-        compNode.y = currentCompY;
-        componentSection.appendChild(compNode);
+          const variantsArray = [defaultComp];
 
-        currentCompY += compNode.height + 50;
-        componentRegistry[comp.name] = compNode;
+          for (const [vName, vTree] of Object.entries(comp.variants)) {
+            const variantComp = figma.createComponent();
+            variantComp.name = `Property 1=${vName}`;
+            variantComp.layoutMode = 'VERTICAL';
+            variantComp.layoutSizingHorizontal = 'HUG';
+            variantComp.layoutSizingVertical = 'HUG';
+            variantComp.fills = [];
+            await buildNode(vTree as any, variantComp, componentRegistry, 0);
+            variantsArray.push(variantComp);
+          }
+
+          const componentSet = figma.combineAsVariants(variantsArray, componentSection);
+          componentSet.name = comp.name;
+          componentSet.x = 50;
+          componentSet.y = currentCompY;
+          // combineAsVariants usually lays out the variants automatically.
+
+          // Add Reaction
+          if (comp.variants["Hover"]) {
+            const hoverVariant = variantsArray.find(v => v.name === "Property 1=Hover");
+            if (hoverVariant) {
+              await defaultComp.setReactionsAsync([{
+                trigger: { type: "ON_HOVER" },
+                actions: [{ type: "NODE", destinationId: hoverVariant.id, navigation: "CHANGE_TO", transition: null }]
+              }]);
+            }
+          }
+
+          currentCompY += componentSet.height + 50;
+          componentRegistry[comp.name] = defaultComp; // We map to default variant so instances are correct
+        } else {
+          // NO VARIANTS
+          const compNode = figma.createComponent();
+          compNode.name = comp.name;
+          // Basic Auto Layout for component container
+          compNode.layoutMode = 'VERTICAL';
+          compNode.layoutSizingHorizontal = 'HUG';
+          compNode.layoutSizingVertical = 'HUG';
+          compNode.fills = []; // transparent root
+
+          // Build the tree inside the component
+          await buildNode(comp.tree, compNode, componentRegistry, 0);
+
+          compNode.x = 50;
+          compNode.y = currentCompY;
+          componentSection.appendChild(compNode);
+
+          currentCompY += compNode.height + 50;
+          componentRegistry[comp.name] = compNode;
+        }
       }
       
       componentPage.appendChild(componentSection);
@@ -98,20 +144,21 @@ figma.ui.onmessage = async (msg) => {
 
     figma.ui.postMessage({ type: 'status', text: `🏗 Building ${screens.length} screen(s)...`, progress: 20 });
 
-    console.log(`[code.ts] Starting to build ${screens.length} screens:`, screens.map(s => s.name));
+    const frameTemplate = msg.frameTemplate || '375x812';
+    const [templateWidth, templateHeight] = frameTemplate.split('x').map((n: string) => parseInt(n, 10));
+
     for (let i = 0; i < screens.length; i++) {
-      await new Promise(res => setTimeout(res, 10)); // Yield to main thread for UI updates
+      await new Promise(res => setTimeout(res, 15)); // Yield to main thread for UI updates
       const screen = screens[i];
-      console.log(`[code.ts] Building screen: ${screen.name}`);
       const progress = 20 + Math.round((i / screens.length) * 65);
       figma.ui.postMessage({ type: 'status', text: `⚙️ Parsing: ${screen.name} (${i + 1}/${screens.length})`, progress });
 
-      // Root screen frame (375×812 — matching PhoneFrame exactly)
+      // Root screen frame
       const rootFrame = figma.createFrame();
       rootFrame.name = `${screen.name}`;
-      rootFrame.x = startX + i * 400;
+      rootFrame.x = startX + i * (templateWidth + 25);
       rootFrame.y = startY;
-      rootFrame.resize(375, 812);
+      rootFrame.resize(templateWidth, templateHeight);
       rootFrame.layoutMode = 'VERTICAL';
       rootFrame.layoutSizingHorizontal = 'FIXED';
       rootFrame.layoutSizingVertical = 'FIXED';
