@@ -87,7 +87,7 @@ export function parseColor(val: string | number): RGB | null {
   return null;
 }
 
-export function applyInlineStyle(node: FrameNode, style: Record<string, string | number>): void {
+export function applyInlineStyle(node: FrameNode | ComponentNode | InstanceNode, style: Record<string, string | number>): void {
   if (!style || !Object.keys(style).length) return;
 
   // Background color
@@ -109,8 +109,40 @@ export function applyInlineStyle(node: FrameNode, style: Record<string, string |
   const bbb = style['borderBottomRightRadius'];if (bbb !== undefined) try { (node as any).bottomRightRadius = typeof bbb === 'number' ? bbb : parseFloat(String(bbb)); } catch(_) {}
 
   // Width / Height
-  const w = style['width'];  if (w !== undefined && typeof w === 'number') { try { node.resize(Math.max(w, 4), Math.max(node.height, 4)); } catch(_) {} }
-  const h = style['height']; if (h !== undefined && typeof h === 'number') { try { node.resize(Math.max(node.width, 4), Math.max(h, 4)); node.layoutSizingVertical = 'FIXED'; } catch(_) {} }
+  const w = style['width'];  
+  if (w !== undefined) { 
+    if (typeof w === 'number') { 
+      try { node.resize(Math.max(w, 4), Math.max(node.height, 4)); } catch(_) {} 
+    } else if (typeof w === 'string') {
+      if (w === '100%') { try { node.layoutSizingHorizontal = 'FILL'; } catch(_) {} }
+      else if (w.endsWith('%')) {
+        const pct = parseFloat(w);
+        if (!isNaN(pct)) {
+          if (pct === 100) { try { node.layoutSizingHorizontal = 'FILL'; } catch(_) {} }
+          else { 
+            const parentW = node.parent && 'width' in node.parent ? node.parent.width : 300;
+            try { node.resize(Math.max((parentW * pct) / 100, 4), Math.max(node.height, 4)); node.layoutSizingHorizontal = 'FIXED'; } catch(_) {} 
+          }
+        }
+      }
+    }
+  }
+
+  const h = style['height']; 
+  if (h !== undefined) { 
+    if (typeof h === 'number') { 
+      try { node.resize(Math.max(node.width, 4), Math.max(h, 4)); node.layoutSizingVertical = 'FIXED'; } catch(_) {} 
+    } else if (typeof h === 'string') {
+      if (h === '100%') { try { node.layoutSizingVertical = 'FILL'; } catch(_) {} }
+      else if (h.endsWith('%')) {
+        const pct = parseFloat(h);
+        if (!isNaN(pct)) {
+          const parentH = node.parent && 'height' in node.parent ? node.parent.height : 100;
+          try { node.resize(Math.max(node.width, 4), Math.max((parentH * pct) / 100, 4)); node.layoutSizingVertical = 'FIXED'; } catch(_) {}
+        }
+      }
+    }
+  }
 
   // Min height
   const mh = style['minHeight']; if (mh !== undefined && typeof mh === 'number') { try { if (node.height < mh) node.resize(Math.max(node.width, 4), mh); } catch(_) {} }
@@ -124,6 +156,14 @@ export function applyInlineStyle(node: FrameNode, style: Record<string, string |
 
   // Gap / margin (approximate with itemSpacing)
   const gap = style['gap']; if (gap !== undefined && typeof gap === 'number') { node.itemSpacing = gap; }
+
+  // Margin (especially negative margin overrides)
+  const mt = style['marginTop'];
+  if (mt !== undefined && typeof mt === 'number') {
+    // Figma Auto Layout does not natively support individual negative margins well without breaking flow.
+    // If we absolutely position it, it breaks the flow of following siblings. 
+    // It's safer to ignore it for general auto-layout translation or handle via container padding.
+  }
 
   // Border / stroke
   const borderColor = style['borderColor'];
@@ -211,10 +251,10 @@ export function resolveColor(classes: string[], prefix: string): RGB | null {
   return null;
 }
 
-export function applyContainerStyles(frame: FrameNode, classes: string[], tag: string): void {
+export function applyContainerStyles(frame: FrameNode | ComponentNode | InstanceNode, classes: string[], tag: string): void {
   if (!classes.length && frame.parent?.type === 'FRAME' && frame.parent.layoutMode === 'VERTICAL') {
      try { frame.layoutSizingHorizontal = 'FILL'; } catch(e) {}
-     return;
+     // Allow it to fall through to set default layoutMode
   }
   const cs = new Set(classes);
 
@@ -328,21 +368,21 @@ export function applyContainerStyles(frame: FrameNode, classes: string[], tag: s
 
   // ── Padding ──
   for (const c of classes) {
-    const p  = c.match(/^p-(.+)$/);   if (p)  { const v = getSpacing(p[1]);  frame.paddingTop = frame.paddingBottom = frame.paddingLeft = frame.paddingRight = v; continue; }
-    const px = c.match(/^px-(.+)$/);  if (px) { const v = getSpacing(px[1]); frame.paddingLeft = frame.paddingRight = v; continue; }
-    const py = c.match(/^py-(.+)$/);  if (py) { const v = getSpacing(py[1]); frame.paddingTop = frame.paddingBottom = v; continue; }
-    const pt = c.match(/^pt-(.+)$/);  if (pt) { frame.paddingTop    = getSpacing(pt[1]); continue; }
-    const pb = c.match(/^pb-(.+)$/);  if (pb) { frame.paddingBottom = getSpacing(pb[1]); continue; }
-    const pl = c.match(/^pl-(.+)$/);  if (pl) { frame.paddingLeft   = getSpacing(pl[1]); continue; }
-    const pr = c.match(/^pr-(.+)$/);  if (pr) { frame.paddingRight  = getSpacing(pr[1]); continue; }
+    const p  = c.match(/^p-(.+)$/);   if (p)  { const v = getSpacing(p[1]) * 4;  frame.paddingTop = frame.paddingBottom = frame.paddingLeft = frame.paddingRight = v; continue; }
+    const px = c.match(/^px-(.+)$/);  if (px) { const v = getSpacing(px[1]) * 4; frame.paddingLeft = frame.paddingRight = v; continue; }
+    const py = c.match(/^py-(.+)$/);  if (py) { const v = getSpacing(py[1]) * 4; frame.paddingTop = frame.paddingBottom = v; continue; }
+    const pt = c.match(/^pt-(.+)$/);  if (pt) { frame.paddingTop    = getSpacing(pt[1]) * 4; continue; }
+    const pb = c.match(/^pb-(.+)$/);  if (pb) { frame.paddingBottom = getSpacing(pb[1]) * 4; continue; }
+    const pl = c.match(/^pl-(.+)$/);  if (pl) { frame.paddingLeft   = getSpacing(pl[1]) * 4; continue; }
+    const pr = c.match(/^pr-(.+)$/);  if (pr) { frame.paddingRight  = getSpacing(pr[1]) * 4; continue; }
   }
 
   // ── Gap ──
   for (const c of classes) {
-    const g  = c.match(/^gap-(.+)$/);   if (g)  { frame.itemSpacing = getSpacing(g[1]); continue; }
-    const gx = c.match(/^gap-x-(.+)$/); if (gx && frame.layoutMode === 'HORIZONTAL') { frame.itemSpacing = getSpacing(gx[1]); continue; }
-    const gy = c.match(/^gap-y-(.+)$/); if (gy && frame.layoutMode === 'VERTICAL')   { frame.itemSpacing = getSpacing(gy[1]); continue; }
-    const sp = c.match(/^space-(?:x|y)-(.+)$/); if (sp) { frame.itemSpacing = getSpacing(sp[1]); continue; }
+    const g  = c.match(/^gap-(.+)$/);   if (g)  { frame.itemSpacing = getSpacing(g[1]) * 4; continue; }
+    const gx = c.match(/^gap-x-(.+)$/); if (gx && frame.layoutMode === 'HORIZONTAL') { frame.itemSpacing = getSpacing(gx[1]) * 4; continue; }
+    const gy = c.match(/^gap-y-(.+)$/); if (gy && frame.layoutMode === 'VERTICAL')   { frame.itemSpacing = getSpacing(gy[1]) * 4; continue; }
+    const sp = c.match(/^space-(?:x|y)-(.+)$/); if (sp) { frame.itemSpacing = getSpacing(sp[1]) * 4; continue; }
   }
 
   // ── Border Radius ──

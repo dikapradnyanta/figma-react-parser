@@ -4,21 +4,92 @@ import { buildNode } from './node-builder';
 import { addStatusBar, addBottomNav, addPrototyping } from './prototyping';
 import { pluginLog } from './logger';
 
+async function createFigmaVariables(tokens: Record<string, any>) {
+  if (!tokens || Object.keys(tokens).length === 0) return;
+  
+  let collection = figma.variables.getLocalVariableCollections().find(c => c.name === 'UI Theme');
+  if (!collection) {
+    collection = figma.variables.createVariableCollection('UI Theme');
+  }
+  
+  const modeId = collection.defaultModeId;
+  let added = 0;
+  
+  for (const [key, value] of Object.entries(tokens)) {
+    if (typeof value === 'string' && (value.startsWith('#') || value.startsWith('rgb'))) {
+      const varName = key.replace(/\./g, '/'); // e.g. colors.primary -> colors/primary
+      let v = figma.variables.getLocalVariables().find(v => v.name === varName && v.variableCollectionId === collection!.id);
+      if (!v) {
+        v = figma.variables.createVariable(varName, collection.id, 'COLOR');
+      }
+      try {
+        const rgb = hexToRgb(value);
+        if (rgb) {
+          v.setValueForMode(modeId, { r: rgb.r, g: rgb.g, b: rgb.b });
+          added++;
+        }
+      } catch (e) {
+        pluginLog(`Failed to set variable ${varName}: ${e}`, 'error');
+      }
+    }
+  }
+  if (added > 0) {
+    pluginLog(`Created/updated ${added} Figma color variables`, 'success');
+  }
+}
+
 figma.showUI(__html__, { width: 500, height: 600, themeColors: true });
 figma.ui.onmessage = async (msg) => {
   if (msg.type !== 'parse-files') return;
 
-  const screens: ParsedScreen[] = msg.screens;
+  const screens: ParsedScreen[] = msg.screens || [];
+  const componentsList: ParsedScreen[] = msg.components || [];
+  const tokens = msg.tokens || {};
   const createdFrames: FrameNode[] = [];
+  const componentRegistry: Record<string, ComponentNode> = {};
 
   try {
     figma.ui.postMessage({ type: 'status', text: '🎨 Loading fonts & creating styles...', progress: 10 });
     await loadFonts();
     await createColorStyles();
     await createTextStyles();
+    await createFigmaVariables(tokens);
 
     const startX = Math.round(figma.viewport.center.x - (screens.length * 400) / 2);
     const startY = Math.round(figma.viewport.center.y - 406);
+
+    // ── Build Components First ──
+    if (componentsList.length > 0) {
+      figma.ui.postMessage({ type: 'status', text: `🧩 Building ${componentsList.length} component(s)...`, progress: 15 });
+      
+      const componentSection = figma.createSection();
+      componentSection.name = '🧩 Components';
+      componentSection.x = startX - 600;
+      componentSection.y = startY;
+      componentSection.resize(500, Math.max(812, componentsList.length * 200 + 100));
+
+      let currentCompY = 50;
+      for (const comp of componentsList) {
+        if (!comp.tree) continue;
+        const compNode = figma.createComponent();
+        compNode.name = comp.name;
+        // Basic Auto Layout for component container
+        compNode.layoutMode = 'VERTICAL';
+        compNode.layoutSizingHorizontal = 'HUG';
+        compNode.layoutSizingVertical = 'HUG';
+        compNode.fills = []; // transparent root
+        
+        // Build the tree inside the component
+        await buildNode(comp.tree, compNode, componentRegistry, 0);
+        
+        compNode.x = 50;
+        compNode.y = currentCompY;
+        componentSection.appendChild(compNode);
+        
+        currentCompY += compNode.height + 50;
+        componentRegistry[comp.name] = compNode;
+      }
+    }
 
     figma.ui.postMessage({ type: 'status', text: `🏗 Building ${screens.length} screen(s)...`, progress: 20 });
 
@@ -30,7 +101,7 @@ figma.ui.onmessage = async (msg) => {
       figma.ui.postMessage({ type: 'status', text: `⚙️ Parsing: ${screen.name} (${i+1}/${screens.length})`, progress });
 
       // Root screen frame (375×812 — matching PhoneFrame exactly)
-      const rootFrame = figma.createFrame();
+      const rootFrame = figma.createComponent();
       rootFrame.name = `📱 ${screen.name}`;
       rootFrame.x = startX + i * 400;
       rootFrame.y = startY;
@@ -60,7 +131,7 @@ figma.ui.onmessage = async (msg) => {
       if (screen.tree) {
         try {
           pluginLog(`⚙️ Starting build for: ${screen.name}`, 'info');
-          await buildNode(screen.tree, contentArea, 0);
+          await buildNode(screen.tree, contentArea, componentRegistry, 0);
           pluginLog(`✅ Finished build for: ${screen.name}`, 'success');
         } catch (err: any) {
           pluginLog(`❌ Build crashed for ${screen.name}: ${err?.message || err}`, 'error');
@@ -82,7 +153,7 @@ figma.ui.onmessage = async (msg) => {
 
     // ── Add Prototyping ──
     figma.ui.postMessage({ type: 'status', text: '🔗 Adding prototype connections...', progress: 88 });
-    addPrototyping(createdFrames);
+    await addPrototyping(createdFrames);
 
     // ── Zoom to fit ──
     if (createdFrames.length > 0) {

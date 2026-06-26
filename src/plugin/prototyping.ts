@@ -1,6 +1,6 @@
 import { hexToRgb, safeLoadFont } from './styles';
 
-export function connectPrototype(from: FrameNode, to: FrameNode, direction: 'LEFT' | 'RIGHT' = 'LEFT'): void {
+export async function connectPrototype(from: FrameNode, to: FrameNode, direction: 'LEFT' | 'RIGHT' = 'LEFT'): Promise<void> {
   try {
     const reaction = {
       trigger: { type: 'ON_CLICK' } as Trigger,
@@ -19,11 +19,11 @@ export function connectPrototype(from: FrameNode, to: FrameNode, direction: 'LEF
       } as unknown as Action,
     } as Reaction;
 
-    (from as any).reactions = [reaction];
+    await (from as any).setReactionsAsync([reaction]);
   } catch (_) { /* prototyping not critical */ }
 }
 
-export function addPrototyping(frames: FrameNode[]): void {
+export async function addPrototyping(frames: FrameNode[]): Promise<void> {
   if (frames.length < 2) return;
 
   for (let i = 0; i < frames.length; i++) {
@@ -46,7 +46,7 @@ export function addPrototyping(frames: FrameNode[]): void {
         
         console.log(`[code.ts] Prototyping: Linking tab ${keyword} to screen ${target.name}`);
         try {
-          (navItems[j] as any).reactions = [{
+          await (navItems[j] as any).setReactionsAsync([{
             trigger: { type: 'ON_CLICK' },
             action: {
               type: 'NODE',
@@ -61,12 +61,12 @@ export function addPrototyping(frames: FrameNode[]): void {
               },
               preserveScrollPosition: false,
             }
-          }];
+          }]);
         } catch (_) {}
       }
     } else {
       // Fallback: connect frame to next in sequence
-      connectPrototype(curr, next, 'LEFT');
+      await connectPrototype(curr, next, 'LEFT');
     }
   }
 }
@@ -82,7 +82,6 @@ export function findBottomNav(frame: FrameNode): FrameNode | null {
   }
   return null;
 }
-
 
 export async function addStatusBar(root: FrameNode): Promise<void> {
   // Status bar: 375 × 44, bg = #0D3B66, text "9:41"
@@ -100,133 +99,94 @@ export async function addStatusBar(root: FrameNode): Promise<void> {
   bar.paddingRight = 24;
 
   // Time label
-  const font = await safeLoadFont({ family: 'Inter', style: 'SemiBold' });
   const time = figma.createText();
-  try { time.fontName = font; } catch(_) {}
-  time.fontSize = 13;
+  time.fontName = await safeLoadFont({ family: 'Inter', style: 'Semi Bold' });
   time.characters = '9:41';
-  time.fills = [{ type: 'SOLID', color: { r: 1, g: 1, b: 1 } }];
+  time.fills = [{ type: 'SOLID', color: hexToRgb('#FFFFFF') }];
+  time.fontSize = 15;
   bar.appendChild(time);
 
-  // Right icons group (signal + wifi + battery)
-  const iconsGroup = figma.createFrame();
-  iconsGroup.name = 'Icons';
-  iconsGroup.fills = [];
-  iconsGroup.layoutMode = 'HORIZONTAL';
-  iconsGroup.layoutSizingHorizontal = 'HUG';
-  iconsGroup.layoutSizingVertical = 'HUG';
-  iconsGroup.counterAxisAlignItems = 'CENTER';
-  iconsGroup.itemSpacing = 4;
+  // Icons placeholder (right)
+  const icons = figma.createFrame();
+  icons.name = 'Icons';
+  icons.layoutMode = 'HORIZONTAL';
+  icons.itemSpacing = 6;
+  icons.fills = [];
+  icons.layoutSizingHorizontal = 'HUG';
+  icons.layoutSizingVertical = 'HUG';
+  icons.counterAxisAlignItems = 'CENTER';
 
-  // Signal bars (4 rects of increasing height)
-  const signalFrame = figma.createFrame();
-  signalFrame.name = 'Signal';
-  signalFrame.fills = [];
-  signalFrame.resize(17, 11);
-  signalFrame.layoutMode = 'HORIZONTAL';
-  signalFrame.layoutSizingHorizontal = 'FIXED';
-  signalFrame.layoutSizingVertical = 'FIXED';
-  signalFrame.counterAxisAlignItems = 'MAX';
-  signalFrame.itemSpacing = 1;
-  const barHeights = [4, 6, 8.5, 11];
-  for (const bh of barHeights) {
-    const b = figma.createRectangle();
-    b.fills = [{ type: 'SOLID', color: { r: 1, g: 1, b: 1 } }];
-    b.resize(3, bh);
-    b.cornerRadius = 1;
-    signalFrame.appendChild(b);
+  for (const sym of ['cellular', 'wifi', 'battery']) {
+    const p = figma.createFrame();
+    p.name = sym;
+    p.resize(18, 12);
+    p.fills = [{ type: 'SOLID', color: hexToRgb('#FFFFFF') }];
+    p.cornerRadius = 2;
+    icons.appendChild(p);
   }
-  iconsGroup.appendChild(signalFrame);
+  bar.appendChild(icons);
 
-  // Wifi icon placeholder
-  const wifiRect = figma.createEllipse();
-  wifiRect.fills = [{ type: 'SOLID', color: { r: 1, g: 1, b: 1 } }];
-  wifiRect.resize(12, 9);
-  iconsGroup.appendChild(wifiRect);
-
-  // Battery icon
-  const battFrame = figma.createFrame();
-  battFrame.name = 'Battery';
-  battFrame.fills = [];
-  battFrame.resize(25, 12);
-  battFrame.layoutMode = 'HORIZONTAL';
-  battFrame.layoutSizingHorizontal = 'FIXED';
-  battFrame.layoutSizingVertical = 'FIXED';
-  battFrame.counterAxisAlignItems = 'CENTER';
-  const battBody = figma.createRectangle();
-  battBody.fills = [{ type: 'SOLID', color: { r: 1, g: 1, b: 1 } }];
-  battBody.resize(17, 8);
-  battBody.cornerRadius = 1.5;
-  battFrame.appendChild(battBody);
-  iconsGroup.appendChild(battFrame);
-
-  bar.appendChild(iconsGroup);
   root.appendChild(bar);
-  try { bar.layoutSizingHorizontal = 'FILL'; } catch (_) {}
 }
 
-export async function addBottomNav(root: FrameNode, screenName: string): Promise<void> {
-  const regularFont = await safeLoadFont({ family: 'Inter', style: 'Regular' });
-  const semiBoldFont = await safeLoadFont({ family: 'Inter', style: 'SemiBold' });
-
-  // Bottom nav: 375 × 80, bg = white, border top
+export async function addBottomNav(root: FrameNode, activeScreen: string): Promise<void> {
+  // 375 × 80
   const nav = figma.createFrame();
-  nav.name = '🔨 Bottom Nav';
+  nav.name = '🔽 Bottom Nav';
   nav.resize(375, 80);
-  nav.fills = [{ type: 'SOLID', color: { r: 1, g: 1, b: 1 } }];
-  nav.strokes = [{ type: 'SOLID', color: hexToRgb('#EEF1F5') }];
-  nav.strokeWeight = 1;
-  nav.strokeAlign = 'INSIDE';
+  nav.fills = [{ type: 'SOLID', color: hexToRgb('#FFFFFF') }];
   nav.layoutMode = 'HORIZONTAL';
   nav.layoutSizingHorizontal = 'FIXED';
   nav.layoutSizingVertical = 'FIXED';
-  nav.counterAxisAlignItems = 'CENTER';
   nav.primaryAxisAlignItems = 'SPACE_BETWEEN';
-  nav.primaryAxisAlignItems = 'SPACE_BETWEEN';
+  nav.counterAxisAlignItems = 'MIN';
+  nav.paddingTop = 16;
+  
+  // top shadow (stroke)
+  nav.strokes = [{ type: 'SOLID', color: hexToRgb('#E5E7EB') }];
+  nav.strokeTopWeight = 1;
 
-  const lowerName = screenName.toLowerCase();
   const tabs = [
-    { label: 'Beranda', active: lowerName.includes('home') },
-    { label: 'Materi', active: lowerName.includes('material') },
-    { label: 'Kuis', active: lowerName.includes('quiz') },
-    { label: 'Forum', active: lowerName.includes('forum') },
+    { id: 'home', label: 'Home', icon: '🏠' },
+    { id: 'material', label: 'Materi', icon: '📚' },
+    { id: 'quiz', label: 'Kuis', icon: '✏️' },
+    { id: 'forum', label: 'Forum', icon: '💬' }
   ];
-  if (!tabs.some(t => t.active)) {
-    if (tabs.length > 0) tabs[0].active = true;
-  }
+
+  await safeLoadFont({ family: 'Inter', style: 'Medium' });
 
   for (const tab of tabs) {
-    const tabFrame = figma.createFrame();
-    tabFrame.name = tab.label;
-    tabFrame.fills = [];
-    tabFrame.layoutMode = 'VERTICAL';
-    tabFrame.layoutSizingHorizontal = 'HUG';
-    tabFrame.layoutSizingVertical = 'HUG';
-    tabFrame.counterAxisAlignItems = 'CENTER';
-    tabFrame.primaryAxisAlignItems = 'CENTER';
-    tabFrame.itemSpacing = 2;
-    tabFrame.paddingTop = 10;
-    tabFrame.paddingBottom = 16;
+    const isActive = activeScreen.toLowerCase().includes(tab.id);
+    const color = isActive ? '#0D3B66' : '#9CA3AF';
 
-    // Icon placeholder (24×24 square)
-    const icon = figma.createRectangle();
-    icon.resize(24, 24);
-    icon.cornerRadius = 4;
-    icon.fills = [{ type: 'SOLID', color: tab.active ? hexToRgb('#0D3B66') : hexToRgb('#6B7280') }];
-    tabFrame.appendChild(icon);
+    const item = figma.createFrame();
+    item.name = `Tab ${tab.label}`;
+    item.layoutMode = 'VERTICAL';
+    item.itemSpacing = 4;
+    item.fills = [];
+    item.layoutSizingHorizontal = 'HUG';
+    item.layoutSizingVertical = 'HUG';
+    item.counterAxisAlignItems = 'CENTER';
+    item.paddingLeft = 16;
+    item.paddingRight = 16;
+    item.paddingTop = 4;
+    item.paddingBottom = 4;
 
-    // Label
+    const icon = figma.createText();
+    icon.characters = tab.icon;
+    icon.fontSize = 20;
+    icon.fills = [{ type: 'SOLID', color: hexToRgb(color) }];
+    
     const label = figma.createText();
-    try { label.fontName = tab.active ? semiBoldFont : regularFont; } catch(_) {}
-    label.fontSize = 11;
+    label.fontName = await safeLoadFont({ family: 'Inter', style: 'Medium' });
     label.characters = tab.label;
-    label.fills = [{ type: 'SOLID', color: tab.active ? hexToRgb('#0D3B66') : hexToRgb('#6B7280') }];
-    tabFrame.appendChild(label);
+    label.fontSize = 11;
+    label.fills = [{ type: 'SOLID', color: hexToRgb(color) }];
 
-    nav.appendChild(tabFrame);
-    try { tabFrame.layoutSizingHorizontal = 'FILL'; } catch (_) {}
+    item.appendChild(icon);
+    item.appendChild(label);
+    nav.appendChild(item);
   }
 
   root.appendChild(nav);
-  try { nav.layoutSizingHorizontal = 'FILL'; } catch (_) {}
 }

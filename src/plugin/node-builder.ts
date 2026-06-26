@@ -38,8 +38,34 @@ const TEXT_TAGS = new Set(['p','span','h1','h2','h3','h4','h5','h6','label','str
 const SKIP_TAGS = new Set(['script','style','link','meta','head','title','noscript','template','slot','svg','path','circle','rect','polygon','polyline','line','ellipse','use','defs','g','symbol']);
 const INLINE_TAGS = new Set(['span','strong','em','b','i','u','mark','small','abbr','code','time','cite','a']);
 
-export async function buildNode(node: ParsedNode, parent: FrameNode, depth: number = 0): Promise<void> {
-  if (depth > 18) return;
+export async function buildNode(
+  node: ParsedNode,
+  parent: FrameNode | ComponentNode | PageNode,
+  componentRegistry: Record<string, ComponentNode>,
+  depth = 0
+) {
+  if (depth > 20) return;
+
+  // ── INSTANCE CREATION for CUSTOM COMPONENTS ──────────────────
+  if (node.tag.match(/^[A-Z]/) && componentRegistry && componentRegistry[node.tag]) {
+    const mainComponent = componentRegistry[node.tag];
+    try {
+      const instance = mainComponent.createInstance();
+      instance.name = `🧩 ${node.tag}`;
+      parent.appendChild(instance);
+      
+      // We do not recurse into node.children here because the component instance 
+      // is static (unless we add component properties or overrides in the future).
+      // Applying overrides would require mapping node children/text into instance layers.
+      
+      // Apply style overrides on the root of the instance if any
+      applyContainerStyles(instance, node.classes);
+      if (node.inlineStyle) applyInlineStyle(instance, node.inlineStyle);
+      return;
+    } catch(e) {
+      console.log(`Failed to create instance for ${node.tag}:`, e);
+    }
+  }
   if (SKIP_TAGS.has(node.tag)) return;
   if (!node.tag) return;
 
@@ -115,15 +141,36 @@ export async function buildNode(node: ParsedNode, parent: FrameNode, depth: numb
 
   // ── ICON PLACEHOLDER ──────────────────────────────────────
   if (node.isIcon) {
-    const iconFrame = figma.createFrame();
     const sizeVal = node.inlineStyle?.['width'] ?? node.inlineStyle?.['size'] ?? 20;
-    const iconSize = typeof sizeVal === 'number' ? sizeVal : 20;
+    const iconSize = typeof sizeVal === 'number' ? sizeVal : parseInt(String(sizeVal)) || 20;
+    const iconColor = node.inlineStyle?.['color'] ? String(node.inlineStyle['color']) : 'currentColor';
+    
+    try {
+      const kebabName = node.tag.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase();
+      const url = `https://unpkg.com/lucide-static@latest/icons/${kebabName}.svg`;
+      const resp = await fetch(url);
+      if (resp.ok) {
+        let svg = await resp.text();
+        if (iconColor !== 'currentColor') {
+           svg = svg.replace(/currentColor/g, iconColor);
+        }
+        const iconNode = figma.createNodeFromSvg(svg);
+        iconNode.name = `🔷 ${node.tag}`;
+        try { iconNode.resize(iconSize, iconSize); } catch(_) {}
+        parent.appendChild(iconNode);
+        return;
+      }
+    } catch(e) {
+      console.log('Failed to fetch SVG for', node.tag, e);
+    }
+
+    const iconFrame = figma.createFrame();
     iconFrame.name = `🔷 ${node.tag}`;
     iconFrame.fills = [{ type: 'SOLID', color: { r: 0.6, g: 0.6, b: 0.65 } }];
     iconFrame.cornerRadius = 2;
     try { iconFrame.resize(iconSize, iconSize); } catch(_) { try { iconFrame.resize(20, 20); } catch(_2) {} }
-    try { iconFrame.layoutSizingHorizontal = 'HUG'; } catch(_) {}
-    try { iconFrame.layoutSizingVertical = 'HUG'; } catch(_) {}
+    try { iconFrame.layoutSizingHorizontal = 'FIXED'; } catch(_) {}
+    try { iconFrame.layoutSizingVertical = 'FIXED'; } catch(_) {}
     parent.appendChild(iconFrame);
     return;
   }
@@ -209,6 +256,24 @@ export async function buildNode(node: ParsedNode, parent: FrameNode, depth: numb
     // Add a background if no fill set (makes empty containers visible)
     if (frame.fills.length === 0 && isVisualContainer(node.tag)) {
       frame.fills = [{ type: 'SOLID', color: { r: 0.95, g: 0.95, b: 0.97 }, opacity: 0.5 }];
+    }
+  }
+
+  // Basic Grid Support
+  const isGridCols2 = node.classes.includes('grid-cols-2');
+  const isGridCols3 = node.classes.includes('grid-cols-3');
+  if (isGridCols2 || isGridCols3) {
+    try { frame.layoutWrap = 'WRAP'; } catch(_) {}
+    const fillWidth = isGridCols2 ? 160 : 100; // approximate widths for wrap
+    for (const child of frame.children) {
+      if (child.type === 'FRAME') {
+        try { 
+          // In wrap, FILL doesn't always divide evenly without min-width in Figma plugin API, 
+          // so we set a fixed width approximation, then FILL
+          child.resize(fillWidth, child.height);
+          child.layoutSizingHorizontal = 'FILL'; 
+        } catch(_) {}
+      }
     }
   }
 }

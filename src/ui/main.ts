@@ -178,14 +178,15 @@ import './style.css';
           return weightA - weightB || a.name.localeCompare(b.name);
         });
 
-        log(`✅ ${screens.length} screens from ${parsedFiles.length} files`, 'success');
-        screens.forEach(s => {
-          log(`  📱 ${s.name}`, 'success');
-          console.log(`[ui.html] Selected Screen: ${s.name} from ${s.filename}`);
-        });
+        // Extract components (non-screens)
+        const components = parsedFiles.filter(f => !screens.includes(f) && !SKIP_COMPONENTS.has(f.name));
+
+        log(`✅ ${screens.length} screens, ${components.length} components`, 'success');
+        screens.forEach(s => log(`  📱 ${s.name}`, 'success'));
+        components.forEach(c => log(`  🧩 ${c.name}`, 'info'));
 
         setProgress(60, 'Sending to Figma...');
-        parent.postMessage({ pluginMessage: { type: 'parse-files', screens } }, '*');
+        parent.postMessage({ pluginMessage: { type: 'parse-files', screens, components, tokens: tokenMap } }, '*');
 
       } catch (err) {
         setProgress(0, 'Error: ' + err.message);
@@ -232,26 +233,17 @@ import './style.css';
       }
 
       if (isCustom && !visited.has(node.tag)) {
+        // Tag is a known component. Instead of inlining, mark it so plugin creates an instance.
         const def = map[node.tag];
         if (def) {
-          const clone = JSON.parse(JSON.stringify(def));
-          node.tag = clone.tag;
-          node.classes = [...new Set([...clone.classes, ...node.classes])];
-          node.text = node.text || clone.text || '';
-          node.children = [...clone.children, ...node.children];
-          node.attrs = { ...clone.attrs, ...node.attrs };
-          // Merge inlineStyle
-          node.inlineStyle = { ...(clone.inlineStyle || {}), ...(node.inlineStyle || {}) };
-          const newVisited = new Set([...visited, node.tag]);
-          resolveTree(node, map, newVisited, depth + 1);
+          // We don't inline anymore. We keep node.tag as "CourseCard"
+          // We still resolve children in case they have custom tags.
+          for (const child of node.children || []) resolveTree(child, map, visited, depth + 1);
           return;
         }
       }
 
-      for (const child of node.children) {
-        resolveTree(child, map, visited, depth + 1);
-      }
+      for (const child of node.children || []) resolveTree(child, map, visited, depth + 1);
     }
 
     // ═══════════════════════════════════════════════════════════
-    
