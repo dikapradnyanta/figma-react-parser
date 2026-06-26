@@ -6,7 +6,7 @@
   "ui": "dist/src/ui/index.html",
   "editorType": ["figma", "dev"],
   "networkAccess": {
-    "allowedDomains": ["https://cdnjs.cloudflare.com"],
-    "reasoning": "Need to load JSZip library from CDN to parse ZIP files"
+    "allowedDomains": ["https://cdnjs.cloudflare.com", "https://unpkg.com"],
+    "reasoning": "Need to load JSZip library from CDN to parse ZIP files, and fetch SVG icons from unpkg"
   }
 }
