@@ -1,393 +1,282 @@
-import { parseInlineStyles } from './inline-style-parser';
+import { parse } from '@babel/parser';
 
-    // ═══════════════════════════════════════════════════════════
-    export const ICON_NAMES = new Set([
-      'Bell','Search','BookText','Home','BookOpen','ClipboardList','MessagesSquare',
-      'Clock','ChevronLeft','ChevronRight','ArrowRight','ArrowLeft','FileQuestion',
-      'Star','Heart','Share','Plus','Minus','X','Check','Info','AlertCircle',
-      'User','Settings','Menu','Grid','List','Filter','Download','Upload',
-      'Phone','Mail','Map','Camera','Image','Video','Music','File','Folder',
-      'Edit','Trash','Copy','Clipboard','Lock','Unlock','Eye','EyeOff',
-      'Loader','RefreshCw','MoreHorizontal','MoreVertical','ChevronDown','ChevronUp',
-      'Send','Mic','Paperclip','Smile','Globe','Wifi','Battery','Bluetooth',
-      'Sun','Moon','Cloud','Zap','Gift','Tag','Bookmark','Flag','Award',
-      'TrendingUp','TrendingDown','BarChart','PieChart','Activity',
-      'ShoppingCart','ShoppingBag','CreditCard','DollarSign','Package',
-    ]);
+// Keep ICON_NAMES for resolving unknown tags that are icons
+export const ICON_NAMES = new Set([
+  'Bell','Search','BookText','Home','BookOpen','ClipboardList','MessagesSquare',
+  'Clock','ChevronLeft','ChevronRight','ArrowRight','ArrowLeft','FileQuestion',
+  'Star','Heart','Share','Plus','Minus','X','Check','Info','AlertCircle',
+  'User','Settings','Menu','Grid','List','Filter','Download','Upload',
+  'Phone','Mail','Map','Camera','Image','Video','Music','File','Folder',
+  'Edit','Trash','Copy','Clipboard','Lock','Unlock','Eye','EyeOff',
+  'Loader','RefreshCw','MoreHorizontal','MoreVertical','ChevronDown','ChevronUp',
+  'Send','Mic','Paperclip','Smile','Globe','Wifi','Battery','Bluetooth',
+  'Sun','Moon','Cloud','Zap','Gift','Tag','Bookmark','Flag','Award',
+  'TrendingUp','TrendingDown','BarChart','PieChart','Activity',
+  'ShoppingCart','ShoppingBag','CreditCard','DollarSign','Package',
+]);
 
-    function cleanCode(code) {
-      let cleaned = code.replace(/(?<!https?:)\/\/[^\n]*/g, '');
-      cleaned = cleaned.replace(/\/\*[\s\S]*?\*\//g, '');
-      return cleaned;
-    }
+export interface ParsedNode {
+  tag: string;
+  classes: string[];
+  inlineStyle?: Record<string, string | number>;
+  text?: string;
+  attrs?: Record<string, string>;
+  actionTo?: string;
+  children: ParsedNode[];
+  isExpression?: boolean;
+}
 
-    export function parseAllComponents(code) {
-      const src = cleanCode(code);
-      const components = [];
-      
-      const pattern = /(?:(?:export\s+(?:default\s+)?)?(?:async\s+)?function|(?:export\s+)?const)\s+([A-Z][a-zA-Z0-9_]*)\s*(?:=\s*(?:async\s+)?(?:\([^\)]*\)|[a-zA-Z0-9_]+)\s*=>|\([^\)]*\))/g;
-      
-      let match;
-      const matches = [];
-      while ((match = pattern.exec(src)) !== null) {
-        matches.push({ name: match[1], index: match.index });
+export function parseAllComponents(code: string): { name: string, tree: ParsedNode }[] {
+  let ast;
+  try {
+    ast = parse(code, {
+      sourceType: 'module',
+      plugins: ['jsx', 'typescript']
+    });
+  } catch (e) {
+    console.error('Babel parse error:', e);
+    return [];
+  }
+
+  const components: { name: string, node: any }[] = [];
+
+  for (const node of ast.program.body) {
+    if (node.type === 'ExportDefaultDeclaration') {
+      const decl = node.declaration;
+      if (decl.type === 'FunctionDeclaration' && decl.id) {
+        components.push({ name: decl.id.name, node: decl });
       }
-      
-      for (let i = 0; i < matches.length; i++) {
-        const current = matches[i];
-        const nextIdx = i + 1 < matches.length ? matches[i+1].index : src.length;
-        const block = src.slice(current.index, nextIdx);
-        
-        const m = block.match(/(?:return|=>)\s*[\(\s]*(<[a-zA-Z<\/])/);
-        if (m) {
-          const startIdx = current.index + m.index + m[0].length - m[1].length;
-          try {
-            const parser = new JSXParser(src, startIdx);
-            const result = parser.parseElement();
-            if (result) components.push({ name: current.name, tree: result });
-          } catch(e) {}
+    } else if (node.type === 'ExportNamedDeclaration') {
+      const decl = node.declaration;
+      if (decl && decl.type === 'VariableDeclaration') {
+        for (const varDecl of decl.declarations) {
+          if (varDecl.id.type === 'Identifier') {
+            components.push({ name: varDecl.id.name, node: varDecl.init });
+          }
+        }
+      } else if (decl && decl.type === 'FunctionDeclaration' && decl.id) {
+        components.push({ name: decl.id.name, node: decl });
+      }
+    } else if (node.type === 'VariableDeclaration') {
+      for (const varDecl of node.declarations) {
+        if (varDecl.id.type === 'Identifier' && varDecl.id.name && varDecl.id.name.length > 0 && varDecl.id.name[0] === varDecl.id.name[0].toUpperCase()) {
+          components.push({ name: varDecl.id.name, node: varDecl.init });
         }
       }
-      return components;
+    } else if (node.type === 'FunctionDeclaration' && node.id && node.id.name[0] === node.id.name[0].toUpperCase()) {
+      components.push({ name: node.id.name, node });
+    }
+  }
+
+  const parsedComponents: { name: string, tree: ParsedNode }[] = [];
+  for (const comp of components) {
+    const jsx = findJSX(comp.node);
+    if (jsx) {
+      const tree = parseJSX(jsx);
+      if (tree) {
+        if (Array.isArray(tree)) {
+          // If the root is a fragment, wrap it in a div
+          parsedComponents.push({
+            name: comp.name,
+            tree: { tag: 'div', classes: [], children: tree as ParsedNode[] }
+          });
+        } else {
+          parsedComponents.push({ name: comp.name, tree: tree as ParsedNode });
+        }
+      }
+    }
+  }
+  return parsedComponents;
+}
+
+function findJSX(node: any): any {
+  if (!node) return null;
+  if (node.type === 'JSXElement' || node.type === 'JSXFragment') return node;
+
+  if (node.type === 'ReturnStatement') {
+    return findJSX(node.argument);
+  }
+  if (node.type === 'BlockStatement') {
+    for (const stmt of node.body) {
+      if (stmt.type === 'ReturnStatement') return findJSX(stmt);
+      if (stmt.type === 'IfStatement') {
+        const branch = findJSX(stmt.consequent) || (stmt.alternate ? findJSX(stmt.alternate) : null);
+        if (branch) return branch;
+      }
+    }
+  }
+  if (node.type === 'ArrowFunctionExpression' || node.type === 'FunctionDeclaration') {
+    return findJSX(node.body);
+  }
+  return null;
+}
+
+function extractASTStyleValue(node: any): string | number | null {
+  if (!node) return null;
+  if (node.type === 'StringLiteral' || node.type === 'NumericLiteral') {
+    return node.value;
+  }
+  if (node.type === 'Identifier') {
+    // Basic fallback for simple variables like `colors.bg` if they were mapped differently, 
+    // but typically identifier alone might be a local variable. We'll return its name.
+    return node.name;
+  }
+  if (node.type === 'MemberExpression') {
+    // e.g. colors.primary -> 'colors.primary'
+    const obj = extractASTStyleValue(node.object);
+    const prop = node.property.name || extractASTStyleValue(node.property);
+    if (obj && prop) return `${obj}.${prop}`;
+  }
+  if (node.type === 'TemplateLiteral') {
+    // simplified: just join the quasis
+    return node.quasis.map((q: any) => q.value.raw).join('');
+  }
+  if (node.type === 'ConditionalExpression') {
+    // cond ? A : B -> we blindly take the consequent (A) for static parsing purposes
+    return extractASTStyleValue(node.consequent);
+  }
+  return null;
+}
+
+function parseJSX(node: any): ParsedNode | ParsedNode[] | null {
+  if (node.type === 'JSXElement') {
+    const opening = node.openingElement;
+    let tag = '';
+    if (opening.name.type === 'JSXIdentifier') {
+      tag = opening.name.name;
+    } else if (opening.name.type === 'JSXMemberExpression') {
+      tag = `${opening.name.object.name}.${opening.name.property.name}`;
     }
 
-    export class JSXParser {
-      constructor(src, pos = 0) {
-        this.src = src;
-        this.pos = pos;
-      }
+    let classes: string[] = [];
+    const inlineStyle: Record<string, string | number> = {};
+    const attrs: Record<string, string> = {};
+    let actionTo: string | undefined = undefined;
 
-      skipWS() {
-        while (this.pos < this.src.length && /\s/.test(this.src[this.pos])) this.pos++;
-      }
+    for (const attr of opening.attributes) {
+      if (attr.type === 'JSXAttribute') {
+        const attrName = attr.name.name;
+        if (typeof attrName !== 'string') continue;
 
-      skipExprAndExtractJSX() {
-        if (this.src[this.pos] !== '{') return [];
-        const exprStart = this.pos;
-        this.pos++;
-        let depth = 1;
-        let jsxChildren = [];
-
-        // Check if this is a .map() expression
-        const exprPreview = this.src.slice(exprStart, Math.min(this.src.length, exprStart + 80));
-        const isMapExpr = /\.(map|filter|flatMap)\s*\(/.test(exprPreview);
-
-        while (this.pos < this.src.length && depth > 0) {
-          const ch = this.src[this.pos];
-          if (ch === '{') { depth++; this.pos++; continue; }
-          if (ch === '}') {
-            depth--;
-            if (depth === 0) { this.pos++; break; }
-            this.pos++; continue;
+        if (attrName === 'className') {
+          if (attr.value && attr.value.type === 'StringLiteral') {
+            classes = attr.value.value.split(/\s+/).filter(Boolean);
+          } else if (attr.value && attr.value.type === 'JSXExpressionContainer') {
+             const val = extractASTStyleValue(attr.value.expression);
+             if (typeof val === 'string') classes = val.split(/\s+/).filter(Boolean);
           }
-          if (ch === '"' || ch === "'" || ch === '`') {
-            const q = ch; this.pos++;
-            while (this.pos < this.src.length) {
-              const c2 = this.src[this.pos];
-              this.pos++;
-              if (c2 === '\\') { this.pos++; continue; }
-              if (c2 === q) break;
-            }
-            continue;
-          }
-          if (ch === '<') {
-            const next = this.src[this.pos + 1];
-            if (/[a-zA-Z\/!]/.test(next)) {
-              const savedPos = this.pos;
-              try {
-                const child = this.parseElement();
-                if (child) {
-                  // If .map(), duplicate 2x extra as placeholders
-                  if (isMapExpr && jsxChildren.length === 0) {
-                    jsxChildren.push(child);
-                    jsxChildren.push(JSON.parse(JSON.stringify(child)));
-                    jsxChildren.push(JSON.parse(JSON.stringify(child)));
-                  } else {
-                    jsxChildren.push(child);
-                  }
-                  continue;
+        } else if (attrName === 'style') {
+          if (attr.value && attr.value.type === 'JSXExpressionContainer' && attr.value.expression.type === 'ObjectExpression') {
+            for (const prop of attr.value.expression.properties) {
+              if (prop.type === 'ObjectProperty' && prop.key.type === 'Identifier') {
+                const val = extractASTStyleValue(prop.value);
+                if (val !== null) {
+                  inlineStyle[prop.key.name] = val;
                 }
-              } catch (_) {}
-              this.pos = savedPos;
-            }
-          }
-          this.pos++;
-        }
-
-        // Add dummy text for simple expressions
-        if (jsxChildren.length === 0) {
-          const exprContent = this.src.slice(exprStart + 1, this.pos - 1).trim();
-          if (exprContent.length > 0 && exprContent.length < 60 && !exprContent.includes('=>')) {
-            jsxChildren.push({
-              tag: '_text',
-              classes: [],
-              text: '…',
-              attrs: {},
-              children: [],
-              inlineStyle: {},
-              _textOnly: true,
-            });
-          }
-        }
-        return jsxChildren;
-      }
-
-      readTagName() {
-        const s = this.pos;
-        while (this.pos < this.src.length && /[a-zA-Z0-9_\-\.]/.test(this.src[this.pos])) this.pos++;
-        return this.src.slice(s, this.pos);
-      }
-
-      // Read the raw string content of an attribute value (for style={{}})
-      readAttrValueRaw() {
-        const ch = this.src[this.pos];
-        if (ch === '"' || ch === "'") {
-          const q = ch; this.pos++;
-          const s = this.pos;
-          while (this.pos < this.src.length && this.src[this.pos] !== q) this.pos++;
-          const v = this.src.slice(s, this.pos);
-          this.pos++;
-          return { type: 'string', value: v };
-        }
-        if (ch === '{') {
-          this.pos++;
-          let depth = 1;
-          const start = this.pos;
-          while (this.pos < this.src.length && depth > 0) {
-            const c = this.src[this.pos];
-            if (c === '{') depth++;
-            else if (c === '}') { depth--; if (depth === 0) { this.pos++; break; } }
-            else if (c === '"' || c === "'" || c === '`') {
-              const q = c; this.pos++;
-              while (this.pos < this.src.length) {
-                const c2 = this.src[this.pos++];
-                if (c2 === '\\') { this.pos++; continue; }
-                if (c2 === q) break;
               }
-              continue;
             }
-            this.pos++;
           }
-          return { type: 'expr', value: this.src.slice(start, this.pos - 1) };
-        }
-        return { type: 'string', value: '' };
-      }
-
-      readAttrValue() {
-        const raw = this.readAttrValueRaw();
-        if (raw.type === 'string') return raw.value;
-        // For expr, try to extract string literals
-        const expr = raw.value;
-        const strLits = [];
-        const re = /['"`]([^'"`]+)['"`]/g;
-        let m;
-        while ((m = re.exec(expr)) !== null) strLits.push(m[1]);
-        return strLits.length > 0 ? strLits.join(' ') : expr.trim().replace(/[^a-zA-Z0-9\s\-_]/g, ' ').trim();
-      }
-
-      readAttrs() {
-        const attrs = {};
-        let styleRaw = null;
-
-        while (this.pos < this.src.length) {
-          this.skipWS();
-          const ch = this.src[this.pos];
-          if (ch === '>' || ch === '/') break;
-          if (this.pos >= this.src.length) break;
-
-          const ns = this.pos;
-          while (this.pos < this.src.length && !/[\s=>/\n{]/.test(this.src[this.pos])) this.pos++;
-          const name = this.src.slice(ns, this.pos).trim();
-          if (!name) { this.pos++; continue; }
-
-          this.skipWS();
-          if (this.src[this.pos] === '=') {
-            this.pos++;
-            this.skipWS();
-
-            // Special handling for style={{ }}
-            if (name === 'style' && this.src[this.pos] === '{') {
-              // Read outer { of style={
-              this.pos++;
-              this.skipWS();
-              // Now read inner { of {{
-              if (this.src[this.pos] === '{') {
-                let depth = 1; this.pos++;
-                const start = this.pos;
-                while (this.pos < this.src.length && depth > 0) {
-                  const c = this.src[this.pos];
-                  if (c === '{') depth++;
-                  else if (c === '}') { depth--; if (depth === 0) break; }
-                  else if (c === '"' || c === "'" || c === '`') {
-                    const q = c; this.pos++;
-                    while (this.pos < this.src.length) {
-                      const c2 = this.src[this.pos++];
-                      if (c2 === '\\') { this.pos++; continue; }
-                      if (c2 === q) break;
+        } else if (attrName === 'to' || attrName === 'href') {
+          if (attr.value && attr.value.type === 'StringLiteral') {
+            actionTo = attr.value.value;
+          } else if (attr.value && attr.value.type === 'JSXExpressionContainer') {
+            const val = extractASTStyleValue(attr.value.expression);
+            if (val !== null) actionTo = String(val);
+          }
+        } else if (attrName === 'onClick') {
+           if (attr.value && attr.value.type === 'JSXExpressionContainer') {
+             const expr = attr.value.expression;
+             if (expr.type === 'ArrowFunctionExpression' || expr.type === 'FunctionExpression') {
+               // Check if body is a CallExpression (e.g. navigate('route'))
+               let callExpr = expr.body;
+               if (callExpr.type === 'BlockStatement') {
+                 // Try to find the call inside the block
+                 for (const stmt of callExpr.body) {
+                   if (stmt.type === 'ExpressionStatement' && stmt.expression.type === 'CallExpression') {
+                     callExpr = stmt.expression;
+                     break;
+                   }
+                 }
+               }
+               if (callExpr && callExpr.type === 'CallExpression') {
+                 if (callExpr.callee.type === 'Identifier' && (callExpr.callee.name === 'navigate' || callExpr.callee.name === 'router.push' || callExpr.callee.name === 'push')) {
+                    if (callExpr.arguments.length > 0) {
+                       const arg = callExpr.arguments[0];
+                       if (arg.type === 'StringLiteral') {
+                         actionTo = arg.value;
+                       }
                     }
-                    continue;
-                  }
-                  this.pos++;
-                }
-                styleRaw = this.src.slice(start, this.pos);
-                this.pos++; // closing }
-                this.skipWS();
-                if (this.src[this.pos] === '}') this.pos++; // closing outer }
-              } else {
-                // style={ expr } without double brace
-                let depth = 1;
-                const start = this.pos;
-                while (this.pos < this.src.length && depth > 0) {
-                  const c = this.src[this.pos];
-                  if (c === '{') depth++;
-                  else if (c === '}') { depth--; if (depth === 0) break; }
-                  this.pos++;
-                }
-                styleRaw = this.src.slice(start, this.pos);
-                this.pos++;
-              }
-            } else {
-              attrs[name] = this.readAttrValue();
-            }
-          } else if (this.src[this.pos] === '{') {
-            this.skipExprAndExtractJSX();
-          } else {
-            attrs[name] = 'true';
+                 }
+               }
+             }
+           }
+        } else {
+          // Other attributes (src, alt, etc)
+          if (attr.value && attr.value.type === 'StringLiteral') {
+            attrs[attrName] = attr.value.value;
+          } else if (attr.value && attr.value.type === 'JSXExpressionContainer') {
+            const val = extractASTStyleValue(attr.value.expression);
+            if (val !== null) attrs[attrName] = String(val);
           }
         }
-
-        // Parse styleRaw into inlineStyle object
-        if (styleRaw) {
-          attrs['__inlineStyle'] = parseInlineStyles(styleRaw);
-        }
-
-        return attrs;
-      }
-
-      parseElement() {
-        this.skipWS();
-        if (this.pos >= this.src.length || this.src[this.pos] !== '<') return null;
-        if (this.src[this.pos + 1] === '/') return null;
-        if (this.src.startsWith('<!--', this.pos)) {
-          const end = this.src.indexOf('-->', this.pos);
-          this.pos = end !== -1 ? end + 3 : this.src.length;
-          return null;
-        }
-        if (this.src[this.pos + 1] === '>') {
-          this.pos += 2;
-          const children = this.parseChildren('');
-          return this.makeNode('div', {}, children, '');
-        }
-
-        this.pos++;
-        this.skipWS();
-        const tag = this.readTagName();
-        if (!tag) { this.pos--; return null; }
-
-        const attrs = this.readAttrs();
-        this.skipWS();
-
-        if (this.src[this.pos] === '/') {
-          this.pos += 2;
-          return this.makeNode(tag, attrs, [], '');
-        }
-        if (this.src[this.pos] !== '>') return null;
-        this.pos++;
-
-        if (tag === 'script' || tag === 'style') {
-          const ct = `</${tag}>`;
-          const ci = this.src.indexOf(ct, this.pos);
-          this.pos = ci !== -1 ? ci + ct.length : this.src.length;
-          return null;
-        }
-
-        const children = this.parseChildren(tag);
-        return this.makeNode(tag, attrs, children, '');
-      }
-
-      parseChildren(parentTag) {
-        const children = [];
-        let safetyLimit = 2000;
-
-        while (this.pos < this.src.length && safetyLimit-- > 0) {
-          const ch = this.src[this.pos];
-
-          if (ch === '<') {
-            if (this.src[this.pos + 1] === '/') {
-              while (this.pos < this.src.length && this.src[this.pos] !== '>') this.pos++;
-              this.pos++;
-              break;
-            }
-            if (this.src[this.pos + 1] === '>' && parentTag === '') {
-              this.pos += 2; break;
-            }
-            const savedPos = this.pos;
-            const child = this.parseElement();
-            if (child) {
-              children.push(child);
-            } else if (this.pos === savedPos) {
-              this.pos++;
-            }
-          } else if (ch === '{') {
-            const innerJSX = this.skipExprAndExtractJSX();
-            for (const n of innerJSX) children.push(n);
-          } else {
-            const s = this.pos;
-            while (this.pos < this.src.length && this.src[this.pos] !== '<' && this.src[this.pos] !== '{') {
-              this.pos++;
-            }
-            const rawText = this.src.slice(s, this.pos).trim();
-            if (rawText && !/\b(function|const|let|export)\b/.test(rawText)) {
-              if (children.length > 0 && children[children.length - 1]._textOnly) {
-                children[children.length - 1].text += ' ' + rawText;
-              } else if (rawText.length > 0 && rawText.length < 500) {
-                children.push({ tag: '_text', classes: [], text: rawText, attrs: {}, children: [], _textOnly: true });
-              }
-            }
-          }
-        }
-        return children;
-      }
-
-      makeNode(tag, attrs, children, text) {
-        const classStr = attrs['className'] || attrs['class'] || '';
-        const classes = classStr
-          .split(/\s+/)
-          .map(c => c.trim())
-          .filter(c => c.length > 0 && !/[(){},]/.test(c));
-
-        const inlineStyle = attrs['__inlineStyle'] || {};
-
-        const cleanAttrs = {};
-        for (const [k, v] of Object.entries(attrs)) {
-          if (k !== 'className' && k !== 'class' && k !== '__inlineStyle') cleanAttrs[k] = v;
-        }
-
-        if (tag === '_text') {
-          return { tag: 'span', classes: [], text, attrs: {}, children: [], inlineStyle: {} };
-        }
-
-        // Check if this is a known icon
-        const isIcon = ICON_NAMES.has(tag);
-
-        let inlineText = text || '';
-        const realChildren = [];
-        for (const child of children) {
-          if (child._textOnly || child.tag === '_text') {
-            inlineText += (inlineText ? ' ' : '') + child.text;
-          } else {
-            realChildren.push(child);
-          }
-        }
-
-        return {
-          tag,
-          classes,
-          text: inlineText.trim(),
-          attrs: cleanAttrs,
-          children: realChildren,
-          inlineStyle,
-          isIcon,
-        };
       }
     }
+
+    const children: ParsedNode[] = [];
+    for (const child of node.children) {
+      const parsedChild = parseJSX(child);
+      if (parsedChild) {
+        if (Array.isArray(parsedChild)) {
+          children.push(...parsedChild);
+        } else {
+          children.push(parsedChild);
+        }
+      }
+    }
+
+    return { tag, classes, inlineStyle, attrs, actionTo, children };
+  } else if (node.type === 'JSXText') {
+    const text = node.value.replace(/[\n\r]+\s*/g, ' ').trim();
+    if (text) {
+      return { tag: 'span', classes: [], text, children: [] };
+    }
+  } else if (node.type === 'JSXExpressionContainer') {
+    if (node.expression.type === 'CallExpression') {
+      if (node.expression.callee.type === 'MemberExpression' && node.expression.callee.property.name === 'map') {
+        // Array map! Simulate 3 elements.
+        const callback = node.expression.arguments[0];
+        const returnedJSX = findJSX(callback);
+        if (returnedJSX) {
+          const parsedChild = parseJSX(returnedJSX);
+          if (parsedChild) {
+             const children = [];
+             for(let i=0; i<3; i++) {
+                children.push(JSON.parse(JSON.stringify(Array.isArray(parsedChild) ? parsedChild[0] : parsedChild)));
+             }
+             return children;
+          }
+        }
+      }
+    } else if (node.expression.type === 'LogicalExpression' && node.expression.operator === '&&') {
+      const right = parseJSX(node.expression.right);
+      if (right) return right;
+    } else if (node.expression.type === 'ConditionalExpression') {
+      // condition ? A : B
+      const consequent = parseJSX(node.expression.consequent);
+      if (consequent) return consequent;
+    } else if (node.expression.type === 'StringLiteral' || node.expression.type === 'NumericLiteral') {
+      return { tag: 'span', classes: [], text: String(node.expression.value), children: [] };
+    }
+  } else if (node.type === 'JSXFragment') {
+    const children: ParsedNode[] = [];
+    for (const child of node.children) {
+      const parsedChild = parseJSX(child);
+      if (parsedChild) {
+        if (Array.isArray(parsedChild)) children.push(...parsedChild);
+        else children.push(parsedChild);
+      }
+    }
+    return children;
+  }
+  return null;
+}

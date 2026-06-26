@@ -141,32 +141,22 @@ import './style.css';
         // Skip wrapper/shell components
         const SKIP_COMPONENTS = new Set(['App', 'PhoneFrame', 'BottomNav', 'Layout', 'Root', 'Provider', 'Router']);
 
-        // Priority: files in /screens/ path
+        // Priority: files in pages/screens/views, or named Screen/Page/View, or have >= 15 nodes
         let screens = parsedFiles.filter(f => {
           if (SKIP_COMPONENTS.has(f.name)) return false;
           const path = f.filename.toLowerCase();
-          return path.includes('/screens/') || path.includes('/pages/') || path.includes('/views/');
+          // Skip UI library components
+          if (path.includes('/ui/') || path.includes('components/ui')) return false;
+          
+          if (path.includes('/pages/') || path.includes('/screens/') || path.includes('/views/')) return true;
+          if (/screen|page|view/i.test(f.name)) return true;
+          // Substantial components are treated as screens
+          if (countNodes(f.tree) >= 15) return true;
+          
+          return false;
         });
 
-        if (screens.length === 0) {
-          // Fallback: files with Screen/Page/View in name, excluding UI library and wrappers
-          screens = parsedFiles.filter(f => {
-            if (SKIP_COMPONENTS.has(f.name)) return false;
-            const path = f.filename.toLowerCase();
-            if (path.includes('/ui/') || path.includes('components/ui')) return false;
-            return /screen|page|view/i.test(f.name);
-          });
-        }
-
-        if (screens.length === 0) {
-          // Final fallback: everything except ui/ and small/wrapper files
-          screens = parsedFiles.filter(f => {
-            if (SKIP_COMPONENTS.has(f.name)) return false;
-            const path = f.filename.toLowerCase();
-            if (path.includes('/ui/') || path.includes('components/ui')) return false;
-            return countNodes(f.tree) >= 5;
-          }).sort((a, b) => countNodes(b.tree) - countNodes(a.tree)).slice(0, 8);
-        }
+        screens.sort((a, b) => countNodes(b.tree) - countNodes(a.tree));
 
         // Logical sorting
         const orderMap = { "home": 1, "materials": 2, "quiz": 3, "forum": 4 };

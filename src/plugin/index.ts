@@ -6,15 +6,15 @@ import { pluginLog } from './logger';
 
 async function createFigmaVariables(tokens: Record<string, any>) {
   if (!tokens || Object.keys(tokens).length === 0) return;
-  
+
   let collection = figma.variables.getLocalVariableCollections().find(c => c.name === 'UI Theme');
   if (!collection) {
     collection = figma.variables.createVariableCollection('UI Theme');
   }
-  
+
   const modeId = collection.defaultModeId;
   let added = 0;
-  
+
   for (const [key, value] of Object.entries(tokens)) {
     if (typeof value === 'string' && (value.startsWith('#') || value.startsWith('rgb'))) {
       const varName = key.replace(/\./g, '/'); // e.g. colors.primary -> colors/primary
@@ -61,11 +61,14 @@ figma.ui.onmessage = async (msg) => {
     // ── Build Components First ──
     if (componentsList.length > 0) {
       figma.ui.postMessage({ type: 'status', text: `🧩 Building ${componentsList.length} component(s)...`, progress: 15 });
-      
+
+      const componentPage = figma.createPage();
+      componentPage.name = '🧩 Components';
+
       const componentSection = figma.createSection();
-      componentSection.name = '🧩 Components';
-      componentSection.x = startX - 600;
-      componentSection.y = startY;
+      componentSection.name = 'UI Components';
+      componentSection.x = 0;
+      componentSection.y = 0;
       componentSection.resize(500, Math.max(812, componentsList.length * 200 + 100));
 
       let currentCompY = 50;
@@ -78,31 +81,34 @@ figma.ui.onmessage = async (msg) => {
         compNode.layoutSizingHorizontal = 'HUG';
         compNode.layoutSizingVertical = 'HUG';
         compNode.fills = []; // transparent root
-        
+
         // Build the tree inside the component
         await buildNode(comp.tree, compNode, componentRegistry, 0);
-        
+
         compNode.x = 50;
         compNode.y = currentCompY;
         componentSection.appendChild(compNode);
-        
+
         currentCompY += compNode.height + 50;
         componentRegistry[comp.name] = compNode;
       }
+      
+      componentPage.appendChild(componentSection);
     }
 
     figma.ui.postMessage({ type: 'status', text: `🏗 Building ${screens.length} screen(s)...`, progress: 20 });
 
     console.log(`[code.ts] Starting to build ${screens.length} screens:`, screens.map(s => s.name));
     for (let i = 0; i < screens.length; i++) {
+      await new Promise(res => setTimeout(res, 10)); // Yield to main thread for UI updates
       const screen = screens[i];
       console.log(`[code.ts] Building screen: ${screen.name}`);
       const progress = 20 + Math.round((i / screens.length) * 65);
-      figma.ui.postMessage({ type: 'status', text: `⚙️ Parsing: ${screen.name} (${i+1}/${screens.length})`, progress });
+      figma.ui.postMessage({ type: 'status', text: `⚙️ Parsing: ${screen.name} (${i + 1}/${screens.length})`, progress });
 
       // Root screen frame (375×812 — matching PhoneFrame exactly)
-      const rootFrame = figma.createComponent();
-      rootFrame.name = `📱 ${screen.name}`;
+      const rootFrame = figma.createFrame();
+      rootFrame.name = `${screen.name}`;
       rootFrame.x = startX + i * 400;
       rootFrame.y = startY;
       rootFrame.resize(375, 812);
@@ -126,7 +132,7 @@ figma.ui.onmessage = async (msg) => {
       contentArea.layoutSizingVertical = 'FIXED';
       contentArea.clipsContent = true;
       rootFrame.appendChild(contentArea);
-      try { contentArea.layoutSizingHorizontal = 'FILL'; contentArea.layoutSizingVertical = 'FILL'; } catch (_) {}
+      try { contentArea.layoutSizingHorizontal = 'FILL'; contentArea.layoutSizingVertical = 'FILL'; } catch (_) { }
 
       if (screen.tree) {
         try {
@@ -141,7 +147,7 @@ figma.ui.onmessage = async (msg) => {
             errText.characters = `⚠️ Parse error in ${screen.name}`;
             errText.fills = [{ type: 'SOLID', color: { r: 1, g: 0.4, b: 0.4 } }];
             contentArea.appendChild(errText);
-          } catch(_) {}
+          } catch (_) { }
         }
       }
 
@@ -161,7 +167,7 @@ figma.ui.onmessage = async (msg) => {
     }
 
     const colorStyleCount = figma.getLocalPaintStyles().length;
-    const textStyleCount  = figma.getLocalTextStyles().length;
+    const textStyleCount = figma.getLocalTextStyles().length;
 
     figma.ui.postMessage({
       type: 'status',

@@ -4,24 +4,24 @@ import { pluginLog } from './logger';
 
 export function layerName(node: ParsedNode): string {
   const cs = node.classes;
-  if (node.tag === 'nav' || cs.some(c => c.includes('nav')))       return '🧭 Navigation';
-  if (node.tag === 'header' || cs.some(c => c === 'header'))       return '🔵 Header';
-  if (node.tag === 'footer' || cs.some(c => c === 'footer'))       return '🔲 Footer';
-  if (cs.some(c => c.includes('progress')))                         return '📊 Progress Bar';
-  if (cs.some(c => c.includes('card')))                             return '🗂 Card';
-  if (cs.some(c => c.includes('badge')))                            return '🏷 Badge';
-  if (cs.some(c => c.includes('modal') || c.includes('dialog')))   return '🪟 Modal';
-  if (cs.some(c => c.includes('avatar') || c.includes('profile'))) return '👤 Avatar';
-  if (node.tag === 'button' || cs.some(c => c.includes('btn')))    return '🔘 Button';
-  if (node.tag === 'input' || cs.some(c => c.includes('input')))   return '✏️ Input Field';
-  if (cs.some(c => c.includes('search')))                           return '🔍 Search Bar';
-  if (cs.some(c => c.includes('list') || c.includes('feed')))      return '📋 List';
-  if (cs.some(c => c.includes('tab')))                              return '📑 Tab';
-  if (cs.some(c => c.includes('skeleton')))                         return '💀 Skeleton';
-  if (node.tag === 'section' || node.tag === 'article')             return '📦 Section';
-  if (node.tag === 'main')                                          return '📄 Content';
-  if (cs.includes('flex') && cs.includes('flex-col'))               return '📐 Column';
-  if (cs.includes('flex'))                                           return '📏 Row';
+  if (node.tag === 'nav' || cs.some(c => c.includes('nav')))       return 'Navigation';
+  if (node.tag === 'header' || cs.some(c => c === 'header'))       return 'Header';
+  if (node.tag === 'footer' || cs.some(c => c === 'footer'))       return 'Footer';
+  if (cs.some(c => c.includes('progress')))                         return 'Progress Bar';
+  if (cs.some(c => c.includes('card')))                             return 'Card';
+  if (cs.some(c => c.includes('badge')))                            return 'Badge';
+  if (cs.some(c => c.includes('modal') || c.includes('dialog')))   return 'Modal';
+  if (cs.some(c => c.includes('avatar') || c.includes('profile'))) return 'Avatar';
+  if (node.tag === 'button' || cs.some(c => c.includes('btn')))    return 'Button';
+  if (node.tag === 'input' || cs.some(c => c.includes('input')))   return 'Input Field';
+  if (cs.some(c => c.includes('search')))                           return 'Search Bar';
+  if (cs.some(c => c.includes('list') || c.includes('feed')))      return 'List';
+  if (cs.some(c => c.includes('tab')))                              return 'Tab';
+  if (cs.some(c => c.includes('skeleton')))                         return 'Skeleton';
+  if (node.tag === 'section' || node.tag === 'article')             return 'Section';
+  if (node.tag === 'main')                                          return 'Content';
+  if (cs.includes('flex') && cs.includes('flex-col'))               return 'Column';
+  if (cs.includes('flex'))                                           return 'Row';
   const first = cs[0] ? '.' + cs[0] : '';
   return `${node.tag}${first}`;
 }
@@ -51,7 +51,7 @@ export async function buildNode(
     const mainComponent = componentRegistry[node.tag];
     try {
       const instance = mainComponent.createInstance();
-      instance.name = `🧩 ${node.tag}`;
+      instance.name = `${node.tag}`;
       parent.appendChild(instance);
       
       // We do not recurse into node.children here because the component instance 
@@ -59,7 +59,8 @@ export async function buildNode(
       // Applying overrides would require mapping node children/text into instance layers.
       
       // Apply style overrides on the root of the instance if any
-      applyContainerStyles(instance, node.classes);
+      if (node.actionTo) instance.setPluginData('actionTo', node.actionTo);
+      applyContainerStyles(instance, node.classes, node.tag);
       if (node.inlineStyle) applyInlineStyle(instance, node.inlineStyle);
       return;
     } catch(e) {
@@ -71,12 +72,12 @@ export async function buildNode(
 
   const cs = new Set(node.classes);
   const hasChildren = node.children.length > 0;
-  const hasText = node.text.trim().length > 0;
+  const hasText = (node.text || '').trim().length > 0;
 
   // ── PROGRESS BAR ──────────────────────────────────────────
   if (isProgressBar(node)) {
     const track = figma.createFrame();
-    track.name = '📊 Progress Bar';
+    track.name = 'Progress Bar';
     track.fills = [{ type: 'SOLID', color: hexToRgb('#E5E7EB') }];
     track.resize(cs.has('w-full') ? 300 : 200, 8);
     track.cornerRadius = 9999;
@@ -103,9 +104,9 @@ export async function buildNode(
 
   // ── IMAGE PLACEHOLDER ─────────────────────────────────────
   if (['img', 'image', 'video', 'figure'].includes(node.tag) ||
-      (node.tag === 'div' && (cs.has('aspect-video') || cs.has('aspect-square') || node.attrs['src']))) {
+      (node.tag === 'div' && (cs.has('aspect-video') || cs.has('aspect-square') || (node.attrs && node.attrs['src'])))) {
     const imgFrame = figma.createFrame();
-    imgFrame.name = '🖼 ' + (node.attrs['alt'] || node.attrs['src']?.split('/').pop()?.split('?')[0] || 'Image');
+    imgFrame.name = 'Image - ' + ((node.attrs && node.attrs['alt']) || (node.attrs && node.attrs['src']?.split('/').pop()?.split('?')[0]) || 'Image');
     imgFrame.fills = [{ type: 'SOLID', color: { r: 0.82, g: 0.84, b: 0.87 } }];
     imgFrame.layoutMode = 'VERTICAL';
     imgFrame.primaryAxisAlignItems = 'CENTER';
@@ -131,8 +132,8 @@ export async function buildNode(
     // Add grey icon placeholder text
     const icon = figma.createText();
     await figma.loadFontAsync({ family: 'Inter', style: 'Regular' });
-    icon.characters = '🖼';
-    icon.fontSize = 24;
+    icon.characters = 'Image';
+    icon.fontSize = 16;
     imgFrame.appendChild(icon);
 
     parent.appendChild(imgFrame);
@@ -155,7 +156,7 @@ export async function buildNode(
            svg = svg.replace(/currentColor/g, iconColor);
         }
         const iconNode = figma.createNodeFromSvg(svg);
-        iconNode.name = `🔷 ${node.tag}`;
+        iconNode.name = `${node.tag}`;
         try { iconNode.resize(iconSize, iconSize); } catch(_) {}
         parent.appendChild(iconNode);
         return;
@@ -164,14 +165,11 @@ export async function buildNode(
       console.log('Failed to fetch SVG for', node.tag, e);
     }
 
-    const iconFrame = figma.createFrame();
-    iconFrame.name = `🔷 ${node.tag}`;
-    iconFrame.fills = [{ type: 'SOLID', color: { r: 0.6, g: 0.6, b: 0.65 } }];
-    iconFrame.cornerRadius = 2;
-    try { iconFrame.resize(iconSize, iconSize); } catch(_) { try { iconFrame.resize(20, 20); } catch(_2) {} }
-    try { iconFrame.layoutSizingHorizontal = 'FIXED'; } catch(_) {}
-    try { iconFrame.layoutSizingVertical = 'FIXED'; } catch(_) {}
-    parent.appendChild(iconFrame);
+    const defaultSvg = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="${iconColor}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>`;
+    const iconNodeFallback = figma.createNodeFromSvg(defaultSvg);
+    iconNodeFallback.name = `${node.tag}`;
+    try { iconNodeFallback.resize(iconSize, iconSize); } catch(_) {}
+    parent.appendChild(iconNodeFallback);
     return;
   }
 
@@ -180,9 +178,10 @@ export async function buildNode(
   if (isTextTag && !hasChildren && hasText) {
     await figma.loadFontAsync({ family: 'Inter', style: 'Regular' });
     const t = figma.createText();
-    t.name = `📝 ${node.tag}: ${node.text.substring(0, 30)}`;
+    t.name = `${node.tag}: ${node.text.substring(0, 30)}`;
     t.characters = node.text.substring(0, 500);
     parent.appendChild(t);
+    if (node.actionTo) t.setPluginData('actionTo', node.actionTo);
     applyTextStyles(t, node.classes);
     if (node.inlineStyle) applyInlineTextStyle(t, node.inlineStyle);
     try { t.textAutoResize = 'HEIGHT'; } catch(_) {}
@@ -198,6 +197,7 @@ export async function buildNode(
   frame.fills = [];
   frame.clipsContent = false;
   parent.appendChild(frame);
+  if (node.actionTo) frame.setPluginData('actionTo', node.actionTo);
 
   // Apply layout + styling (Tailwind classes first, then inline style overrides)
   try {
@@ -213,6 +213,7 @@ export async function buildNode(
     const t = figma.createText();
     t.characters = node.text.substring(0, 500);
     frame.appendChild(t);
+    if (node.actionTo) t.setPluginData('actionTo', node.actionTo);
     applyTextStyles(t, node.classes);
     if (node.inlineStyle) applyInlineTextStyle(t, node.inlineStyle);
     try { t.textAutoResize = 'HEIGHT'; } catch(_) {}
@@ -233,7 +234,7 @@ export async function buildNode(
   }
 
   for (const child of childrenToRender) {
-    try { await buildNode(child, frame, depth + 1); }
+    try { await buildNode(child, frame, componentRegistry, depth + 1); }
     catch (e: any) { 
       console.error('buildNode child error:', e); 
       pluginLog(`   │ ✗ Child build error at <${child?.tag}>: ${e?.message || e}`, 'error');
@@ -266,10 +267,11 @@ export async function buildNode(
     try { frame.layoutWrap = 'WRAP'; } catch(_) {}
     const fillWidth = isGridCols2 ? 160 : 100; // approximate widths for wrap
     for (const child of frame.children) {
-      if (child.type === 'FRAME') {
+      if (child.type === 'FRAME' || child.type === 'INSTANCE' || child.type === 'COMPONENT') {
         try { 
           // In wrap, FILL doesn't always divide evenly without min-width in Figma plugin API, 
           // so we set a fixed width approximation, then FILL
+          if ('minWidth' in child) (child as any).minWidth = fillWidth;
           child.resize(fillWidth, child.height);
           child.layoutSizingHorizontal = 'FILL'; 
         } catch(_) {}

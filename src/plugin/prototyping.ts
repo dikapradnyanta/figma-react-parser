@@ -26,47 +26,40 @@ export async function connectPrototype(from: FrameNode, to: FrameNode, direction
 export async function addPrototyping(frames: FrameNode[]): Promise<void> {
   if (frames.length < 2) return;
 
-  for (let i = 0; i < frames.length; i++) {
-    const curr = frames[i];
-    const next = frames[(i + 1) % frames.length];
-    const prev = frames[(i - 1 + frames.length) % frames.length];
-
-    // Try to find bottom nav within this frame for tab-by-tab connections
-    const bottomNav = findBottomNav(curr);
-    if (bottomNav && bottomNav.children.length > 0) {
-      const navItems = Array.from(bottomNav.children);
-      const tabKeywords = ['home', 'material', 'quiz', 'forum'];
+  for (const root of frames) {
+    const triggerNodes = root.findAll(node => !!node.getPluginData('actionTo'));
+    
+    for (const triggerNode of triggerNodes) {
+      const rawAction = triggerNode.getPluginData('actionTo');
+      // Normalize rawAction (e.g. "/dashboard" -> "dashboard")
+      let route = rawAction.replace(/^\//, '').toLowerCase();
+      // Try exact match first, then partial match
+      let targetFrame = frames.find(f => f.name.toLowerCase() === route);
+      if (!targetFrame) {
+         targetFrame = frames.find(f => f.name.toLowerCase().includes(route));
+      }
       
-      for (let j = 0; j < navItems.length; j++) {
-        const keyword = tabKeywords[j];
-        // Find the matching screen for this tab
-        const targetIndex = frames.findIndex(f => f.name.toLowerCase().includes(keyword));
-        if (targetIndex === -1) continue;
-        const target = frames[targetIndex];
-        
-        console.log(`[code.ts] Prototyping: Linking tab ${keyword} to screen ${target.name}`);
+      if (targetFrame) {
         try {
-          await (navItems[j] as any).setReactionsAsync([{
+          const reaction = {
             trigger: { type: 'ON_CLICK' },
             action: {
               type: 'NODE',
-              destinationId: target.id,
+              destinationId: targetFrame.id,
               navigation: 'NAVIGATE',
               transition: {
-                type: targetIndex > i ? 'MOVE_IN' : 'MOVE_OUT',
-                direction: targetIndex > i ? 'LEFT' : 'RIGHT',
-                matchLayers: false,
+                type: 'DISSOLVE',
                 duration: 0.3,
-                easing: { type: 'EASE_IN_AND_OUT' },
-              },
-              preserveScrollPosition: false,
+                easing: { type: 'EASE_IN_AND_OUT' }
+              }
             }
-          }]);
-        } catch (_) {}
+          };
+          // Cast to any to avoid strict type issues with Reaction types if they're outdated in TS
+          (triggerNode as any).reactions = [reaction];
+        } catch (e) {
+          console.error(`[code.ts] Failed to link prototype for ${rawAction}:`, e);
+        }
       }
-    } else {
-      // Fallback: connect frame to next in sequence
-      await connectPrototype(curr, next, 'LEFT');
     }
   }
 }
@@ -84,6 +77,14 @@ export function findBottomNav(frame: FrameNode): FrameNode | null {
 }
 
 export async function addStatusBar(root: FrameNode): Promise<void> {
+  const customStatusBar = figma.root.findOne(node => node.type === 'COMPONENT' && node.name === '_TemplateStatusBar') as ComponentNode | null;
+  if (customStatusBar) {
+    const instance = customStatusBar.createInstance();
+    root.appendChild(instance);
+    try { instance.layoutSizingHorizontal = 'FILL'; } catch (_) {}
+    return;
+  }
+
   // Status bar: 375 × 44, bg = #0D3B66, text "9:41"
   const bar = figma.createFrame();
   bar.name = '📶 Status Bar';
@@ -130,6 +131,14 @@ export async function addStatusBar(root: FrameNode): Promise<void> {
 }
 
 export async function addBottomNav(root: FrameNode, activeScreen: string): Promise<void> {
+  const customBottomNav = figma.root.findOne(node => node.type === 'COMPONENT' && node.name === '_TemplateBottomNav') as ComponentNode | null;
+  if (customBottomNav) {
+    const instance = customBottomNav.createInstance();
+    root.appendChild(instance);
+    try { instance.layoutSizingHorizontal = 'FILL'; } catch (_) {}
+    return;
+  }
+
   // 375 × 80
   const nav = figma.createFrame();
   nav.name = '🔽 Bottom Nav';
@@ -147,10 +156,10 @@ export async function addBottomNav(root: FrameNode, activeScreen: string): Promi
   nav.strokeTopWeight = 1;
 
   const tabs = [
-    { id: 'home', label: 'Home', icon: '🏠' },
-    { id: 'material', label: 'Materi', icon: '📚' },
-    { id: 'quiz', label: 'Kuis', icon: '✏️' },
-    { id: 'forum', label: 'Forum', icon: '💬' }
+    { id: 'home', label: 'Home', svg: (c: string) => `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>` },
+    { id: 'material', label: 'Materi', svg: (c: string) => `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/></svg>` },
+    { id: 'quiz', label: 'Kuis', svg: (c: string) => `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>` },
+    { id: 'forum', label: 'Forum', svg: (c: string) => `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/></svg>` }
   ];
 
   await safeLoadFont({ family: 'Inter', style: 'Medium' });
@@ -172,10 +181,8 @@ export async function addBottomNav(root: FrameNode, activeScreen: string): Promi
     item.paddingTop = 4;
     item.paddingBottom = 4;
 
-    const icon = figma.createText();
-    icon.characters = tab.icon;
-    icon.fontSize = 20;
-    icon.fills = [{ type: 'SOLID', color: hexToRgb(color) }];
+    const icon = figma.createNodeFromSvg(tab.svg(color));
+    icon.name = 'Icon';
     
     const label = figma.createText();
     label.fontName = await safeLoadFont({ family: 'Inter', style: 'Medium' });

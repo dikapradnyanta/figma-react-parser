@@ -204,7 +204,7 @@ export function applyInlineStyle(node: FrameNode | ComponentNode | InstanceNode,
   const w = style['width'];  
   if (w !== undefined) { 
     if (typeof w === 'number') { 
-      try { node.resize(Math.max(w, 4), Math.max(node.height, 4)); } catch(_) {} 
+      try { node.resize(Math.max(w, 4), Math.max(node.height, 4)); node.layoutSizingHorizontal = 'FIXED'; } catch(_) {} 
     } else if (typeof w === 'string') {
       if (w === '100%') { try { node.layoutSizingHorizontal = 'FILL'; } catch(_) {} }
       else if (w.endsWith('%')) {
@@ -237,7 +237,17 @@ export function applyInlineStyle(node: FrameNode | ComponentNode | InstanceNode,
   }
 
   // Min height
-  const mh = style['minHeight']; if (mh !== undefined && typeof mh === 'number') { try { if (node.height < mh) node.resize(Math.max(node.width, 4), mh); } catch(_) {} }
+  const mh = style['minHeight'];
+  if (mh !== undefined) {
+     const mhv = typeof mh === 'number' ? mh : parseFloat(String(mh));
+     if (!isNaN(mhv)) {
+       try { (node as any).minHeight = mhv; } catch(_) {
+         if (node.height < mhv) {
+           try { node.resize(Math.max(node.width, 4), mhv); node.layoutSizingVertical = 'FIXED'; } catch(_) {}
+         }
+       }
+     }
+  }
 
   // Padding
   const p  = style['padding'];        if (p  !== undefined && typeof p  === 'number') { node.paddingTop = node.paddingBottom = node.paddingLeft = node.paddingRight = p; }
@@ -253,8 +263,59 @@ export function applyInlineStyle(node: FrameNode | ComponentNode | InstanceNode,
   const mt = style['marginTop'];
   if (mt !== undefined && typeof mt === 'number') {
     // Figma Auto Layout does not natively support individual negative margins well without breaking flow.
-    // If we absolutely position it, it breaks the flow of following siblings. 
-    // It's safer to ignore it for general auto-layout translation or handle via container padding.
+  }
+
+  // Absolute positioning support
+  const pos = style['position'];
+  if (pos === 'absolute' || pos === 'fixed') {
+    try { node.layoutPositioning = 'ABSOLUTE'; } catch(e) {}
+    let t = style['top'];
+    let b = style['bottom'];
+    let l = style['left'];
+    let r = style['right'];
+    
+    // Convert string to number if needed
+    if (typeof t === 'string') t = parseFloat(t) || 0;
+    if (typeof b === 'string') b = parseFloat(b) || 0;
+    if (typeof l === 'string') l = parseFloat(l) || 0;
+    if (typeof r === 'string') r = parseFloat(r) || 0;
+
+    let hConstraint: ConstraintType = 'MIN';
+    let vConstraint: ConstraintType = 'MIN';
+    
+    if (l !== undefined && r !== undefined) hConstraint = 'STRETCH';
+    else if (r !== undefined) hConstraint = 'MAX';
+    else if (l !== undefined) hConstraint = 'MIN';
+
+    if (t !== undefined && b !== undefined) vConstraint = 'STRETCH';
+    else if (b !== undefined) vConstraint = 'MAX';
+    else if (t !== undefined) vConstraint = 'MIN';
+
+    try {
+       node.constraints = { horizontal: hConstraint, vertical: vConstraint };
+       
+       if (hConstraint === 'MAX' && r !== undefined && typeof r === 'number') {
+           const parentW = node.parent && 'width' in node.parent ? node.parent.width : 375;
+           node.x = parentW - node.width - r;
+       } else if (hConstraint === 'STRETCH' && typeof l === 'number' && typeof r === 'number') {
+           const parentW = node.parent && 'width' in node.parent ? node.parent.width : 375;
+           node.x = l;
+           node.resize(Math.max(parentW - l - r, 4), Math.max(node.height, 4));
+       } else if (typeof l === 'number') {
+           node.x = l;
+       }
+       
+       if (vConstraint === 'MAX' && b !== undefined && typeof b === 'number') {
+           const parentH = node.parent && 'height' in node.parent ? node.parent.height : 812;
+           node.y = parentH - node.height - b;
+       } else if (vConstraint === 'STRETCH' && typeof t === 'number' && typeof b === 'number') {
+           const parentH = node.parent && 'height' in node.parent ? node.parent.height : 812;
+           node.y = t;
+           node.resize(Math.max(node.width, 4), Math.max(parentH - t - b, 4));
+       } else if (typeof t === 'number') {
+           node.y = t;
+       }
+    } catch (_) {}
   }
 
   // Border / stroke
@@ -265,9 +326,14 @@ export function applyInlineStyle(node: FrameNode | ComponentNode | InstanceNode,
     if (c) { node.strokes = [{ type: 'SOLID', color: c }]; node.strokeWeight = 1; node.strokeAlign = 'INSIDE'; }
   } else if (border && typeof border === 'string') {
     const bm = border.match(/#[0-9a-fA-F]{3,6}/);
+    const wm = border.match(/([\d.]+)px/);
     if (bm) {
       const c = parseColor(bm[0]);
-      if (c) { node.strokes = [{ type: 'SOLID', color: c }]; node.strokeWeight = 1; node.strokeAlign = 'INSIDE'; }
+      if (c) { 
+        node.strokes = [{ type: 'SOLID', color: c }]; 
+        node.strokeWeight = wm ? parseFloat(wm[1]) : 1; 
+        node.strokeAlign = 'INSIDE'; 
+      }
     }
   }
 
@@ -317,12 +383,23 @@ export function applyInlineTextStyle(t: TextNode, style: Record<string, string |
     if (c) t.fills = [{ type: 'SOLID', color: c }];
   }
 
+  // Font family
+  const ff = style['fontFamily'];
+  if (ff !== undefined && typeof ff === 'string') {
+    // Basic mapping, assuming Inter is loaded
+    if (ff.toLowerCase().includes('serif')) {
+      try { t.fontName = { family: 'Georgia', style: t.fontName.style }; } catch(_) {}
+    }
+  }
+
+  // Line height
   const lh = style['lineHeight'];
   if (lh !== undefined && typeof lh === 'number') {
-    try { t.lineHeight = { unit: 'PIXELS', value: lh }; } catch(_) {}
-  } else if (lh !== undefined && typeof lh === 'number' && lh <= 3) {
-    // Ratio like 1.5
-    try { t.lineHeight = { unit: 'PERCENT', value: lh * 100 }; } catch(_) {}
+    if (lh <= 3) {
+       try { t.lineHeight = { unit: 'PERCENT', value: lh * 100 }; } catch(_) {}
+    } else {
+       try { t.lineHeight = { unit: 'PIXELS', value: lh }; } catch(_) {}
+    }
   }
 
   const ta = style['textAlign'];
@@ -364,10 +441,11 @@ export function applyContainerStyles(frame: FrameNode | ComponentNode | Instance
   
   if (tag !== 'span' && tag !== 'a' && tag !== 'i' && tag !== 'strong' && frame.parent?.type === 'FRAME' && frame.parent.layoutMode === 'VERTICAL') {
      try { frame.layoutSizingHorizontal = 'FILL'; } catch(e) {}
+     try { (frame as any).layoutAlign = 'STRETCH'; } catch(e) {}
   }
 
   // ── Smart Component Defaults (Fallbacks for unresolved tags) ──
-  const tLower = tag.toLowerCase();
+  const tLower = (tag || "").toLowerCase();
   if (tLower === 'row' || tLower.includes('hstack')) {
     frame.layoutMode = 'HORIZONTAL';
   } else if (tLower === 'column' || tLower.includes('vstack')) {
@@ -383,7 +461,6 @@ export function applyContainerStyles(frame: FrameNode | ComponentNode | Instance
     frame.layoutMode = 'HORIZONTAL';
     frame.primaryAxisAlignItems = 'CENTER';
     frame.counterAxisAlignItems = 'CENTER';
-    if (frame.fills.length === 0) frame.fills = [{ type: 'SOLID', color: {r:0.05, g:0.09, b:0.16} }];
     if (!frame.cornerRadius) frame.cornerRadius = 6;
     if (frame.paddingLeft === 0) {
       frame.paddingLeft = 16; frame.paddingRight = 16;
@@ -414,9 +491,35 @@ export function applyContainerStyles(frame: FrameNode | ComponentNode | Instance
     // if flex horizontal, child width is based on flex rules, but we leave it AUTO for now
   }
 
+  // ── Flex Grow (flex-1) ──
+  if (cs.has('flex-1') || cs.has('grow')) {
+    if (frame.parent && 'layoutMode' in frame.parent) {
+      if (frame.parent.layoutMode === 'HORIZONTAL') { try { frame.layoutSizingHorizontal = 'FILL'; } catch(e) {} }
+      if (frame.parent.layoutMode === 'VERTICAL') { try { frame.layoutSizingVertical = 'FILL'; } catch(e) {} }
+    }
+  }
+
   // ── Positioning ──
   if (cs.has('absolute') || cs.has('fixed')) {
     try { frame.layoutPositioning = 'ABSOLUTE'; } catch(e) {}
+  }
+
+  // ── Auto Margins (mt-auto, ml-auto) ──
+  if (cs.has('mt-auto') && frame.parent && 'layoutMode' in frame.parent && frame.parent.layoutMode === 'VERTICAL') {
+    const spacer = figma.createFrame();
+    spacer.name = 'Spacer (mt-auto)';
+    spacer.fills = [];
+    try { spacer.layoutSizingVertical = 'FILL'; } catch(e){}
+    const index = frame.parent.children.indexOf(frame);
+    if (index >= 0) frame.parent.insertChild(index, spacer);
+  }
+  if (cs.has('ml-auto') && frame.parent && 'layoutMode' in frame.parent && frame.parent.layoutMode === 'HORIZONTAL') {
+    const spacer = figma.createFrame();
+    spacer.name = 'Spacer (ml-auto)';
+    spacer.fills = [];
+    try { spacer.layoutSizingHorizontal = 'FILL'; } catch(e){}
+    const index = frame.parent.children.indexOf(frame);
+    if (index >= 0) frame.parent.insertChild(index, spacer);
   }
 
   // ── Alignment ──
@@ -431,6 +534,7 @@ export function applyContainerStyles(frame: FrameNode | ComponentNode | Instance
   // ── Width ──
   if (cs.has('w-full') || cs.has('w-screen')) {
     try { frame.layoutSizingHorizontal = 'FILL'; } catch (_) {}
+    try { (frame as any).layoutAlign = 'STRETCH'; } catch (_) {}
   } else if (cs.has('w-auto')) {
     try { frame.layoutSizingHorizontal = 'HUG'; } catch (_) {}
   } else {
