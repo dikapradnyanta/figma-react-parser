@@ -1,7 +1,7 @@
 import JSZip from 'jszip';
-import { parseThemeContent, applyThemeTokens } from './parser/theme-resolver';
-import { parseAllComponents, ICON_NAMES } from './parser/jsx-parser';
-import { countNodes, resolveTree } from './parser/inline-style-parser';
+import { parseThemeContent, applyThemeTokens, parseCssVariables, parseTailwindConfig } from './parser/theme-resolver';
+import { parseAllComponents, ICON_NAMES, ParseOptions } from './parser/jsx-parser';
+
 import type { ParsedScreen, ComponentNode as ParsedComponentNode } from '../plugin/types';
 
 import './style.css';
@@ -98,18 +98,81 @@ import './style.css';
     // ══════════════════════════════════════════════════════════
     // ICON_NAMES is now imported from jsx-parser.ts
 
+    // ── Helpers for Parse Report ──
+    function renderParseReport(
+      successList: { name: string; nodes: number; filename: string }[],
+      failList: { filename: string; reason: string }[],
+      skipList: { filename: string }[]
+    ) {
+      const reportEl = document.getElementById('parse-report');
+      const statsEl  = document.getElementById('report-stats');
+      const successListEl = document.getElementById('report-success-list');
+      const failListEl    = document.getElementById('report-fail-list');
+      if (!reportEl || !statsEl || !successListEl || !failListEl) return;
+
+      // Stats row
+      statsEl.innerHTML = `
+        <div class="report-stat-item"><span class="report-stat-dot dot-success"></span>${successList.length} file sukses</div>
+        <div class="report-stat-item"><span class="report-stat-dot dot-fail"></span>${failList.length} file gagal</div>
+        <div class="report-stat-item"><span class="report-stat-dot dot-skip"></span>${skipList.length} file dilewati</div>
+      `;
+
+      // Success column
+      successListEl.innerHTML = successList.length
+        ? successList.map(s =>
+            `<div class="report-list-item">
+               <span class="item-name">${s.name}</span>
+               <span class="item-detail">(${s.nodes} nodes)</span>
+             </div>`
+          ).join('')
+        : '<div style="color:#484F58;">— tidak ada —</div>';
+
+      // Fail column
+      failListEl.innerHTML = failList.length
+        ? failList.map(f =>
+            `<div class="report-list-item">
+               <span class="item-name">${f.filename.split('/').pop()}</span>
+               <span class="item-detail" title="${f.reason}">!</span>
+             </div>`
+          ).join('')
+        : '<div style="color:#484F58;">— tidak ada —</div>';
+
+      reportEl.style.display = 'block';
+    }
+
     // ── ZIP HANDLER ───────────────────────────────────────────
     async function handleZip(file) {
       statusArea.classList.add('visible');
       logArea.innerHTML = '';
+
+      // Hide old report
+      const reportEl = document.getElementById('parse-report');
+      if (reportEl) reportEl.style.display = 'none';
+
       setProgress(5, 'Reading ZIP...');
-      log('📦 ' + file.name);
+      log('Package: ' + file.name);
       
       const minNodeInput = document.getElementById('minNodeInput') as HTMLInputElement;
       const minNodeCount = minNodeInput ? parseInt(minNodeInput.value, 10) || 5 : 5;
       
       const frameTemplateSelect = document.getElementById('frameTemplateSelect') as HTMLSelectElement;
       const frameTemplate = frameTemplateSelect ? frameTemplateSelect.value : '375x812';
+
+      const frameworkSelect = document.getElementById('frameworkSelect') as HTMLSelectElement;
+      const framework = (frameworkSelect?.value || 'generic') as ParseOptions['framework'];
+
+      const mockCountInput = document.getElementById('mockCountInput') as HTMLInputElement;
+      const mockCount = mockCountInput ? Math.max(1, parseInt(mockCountInput.value, 10) || 3) : 3;
+
+      log(`Framework: ${frameworkSelect?.options[frameworkSelect.selectedIndex]?.text || framework}`, 'info');
+      log(`Mock items per .map(): ${mockCount}`, 'info');
+
+      // ── Parse tracking ──
+      const parseSuccessList: { name: string; nodes: number; filename: string }[] = [];
+      const parseFailList: { filename: string; reason: string }[] = [];
+      const parseSkipList: { filename: string }[] = [];
+
+      const parseOptions: ParseOptions = { framework, mockCount };
 
       try {
         const zip = await JSZip.loadAsync(file);
@@ -118,16 +181,28 @@ import './style.css';
         setProgress(10, 'Reading design tokens...');
         let tokenMap = {};
         for (const [filename, entry] of Object.entries(zip.files)) {
-          if (entry.dir) continue;
-          if (/theme\.(ts|js|tsx)$/i.test(filename) && !filename.includes('node_modules')) {
+          if (entry.dir || filename.includes('node_modules')) continue;
+          
+          let fileTokens = {};
+          
+          if (/theme\.(ts|js|tsx)$/i.test(filename)) {
             const content = await entry.async('text');
-            tokenMap = parseThemeContent(content);
-            const count = Object.keys(tokenMap).length;
-            log(`🎨 Theme loaded: ${count} tokens from ${filename}`, 'success');
-            for (const [k, v] of Object.entries(tokenMap).slice(0, 6)) {
+            fileTokens = parseThemeContent(content);
+          } else if (/\.css$/i.test(filename)) {
+            const content = await entry.async('text');
+            fileTokens = parseCssVariables(content);
+          } else if (/tailwind\.config\.(js|ts)$/i.test(filename)) {
+            const content = await entry.async('text');
+            fileTokens = parseTailwindConfig(content);
+          }
+          
+          const count = Object.keys(fileTokens).length;
+          if (count > 0) {
+            tokenMap = { ...tokenMap, ...fileTokens };
+            log(`Theme loaded: ${count} tokens from ${filename}`, 'success');
+            for (const [k, v] of Object.entries(fileTokens).slice(0, 3)) {
               log(`   ${k} = ${v}`, 'info');
             }
-            break;
           }
         }
 
@@ -143,12 +218,12 @@ import './style.css';
             // Apply theme token substitution before parsing
             const content = applyThemeTokens(rawContent, tokenMap);
             filesData.push({ filename, content });
-            log('✓ ' + filename, 'info');
+            log('Loaded: ' + filename, 'info');
           }
         }
 
         if (!filesData.length) {
-          setProgress(0, '⚠️ No .tsx/.jsx files found');
+          setProgress(0, 'No .tsx/.jsx files found');
           log('No React files found!', 'error'); return;
         }
 
@@ -160,20 +235,24 @@ import './style.css';
 
         for (const f of filesData) {
           try {
-            const comps = parseAllComponents(f.content, f.filename);
+            const comps = parseAllComponents(f.content, f.filename, parseOptions);
             if (comps.length > 0) {
               for (const { name, tree, isDefaultExport } of comps) {
                 componentMap[name] = tree;
                 // Only push the first (main) component as the screen, or if it's explicitly a screen
                 // Actually, let's push ALL components to parsedFiles so they can be resolved.
                 parsedFiles.push({ filename: f.filename, name, tree, isDefaultExport });
-                log(`  ✓ parsed: ${name} (${countNodes(tree)} nodes)`, 'success');
+                const nodeCount = countNodes(tree);
+                log(`  Parsed: ${name} (${nodeCount} nodes)`, 'success');
+                parseSuccessList.push({ name, nodes: nodeCount, filename: f.filename });
               }
             } else {
-              log(`  ⚠ no JSX: ${f.filename.split('/').pop()}`, 'info');
+              log(`  No JSX: ${f.filename.split('/').pop()}`, 'info');
+              parseSkipList.push({ filename: f.filename });
             }
-          } catch(e) {
-            log(`  ⚠ Error parsing ${f.filename}: ${e.message}`, 'error');
+          } catch(e: any) {
+            log(`  Error parsing ${f.filename}: ${e?.message || String(e)}`, 'error');
+            parseFailList.push({ filename: f.filename, reason: e?.message || String(e) });
           }
         }
 
@@ -185,38 +264,49 @@ import './style.css';
 
         // ── PASS 3: Determine Screens vs Components ──
         // Skip wrapper/shell components
-        const SKIP_COMPONENTS = new Set(['BottomNav', 'Provider', 'Router', 'Root', 'Layout']);
+        const SKIP_COMPONENTS = new Set(['BottomNav', 'Provider', 'Router', 'Root', 'Layout', 'App']);
 
         // Priority: files in pages/screens/views/app, or named Screen/Page/View/App, or have >= 15 nodes
         let screens = parsedFiles.filter(f => {
           if (SKIP_COMPONENTS.has(f.name)) return false;
           
           const nodes = countNodes(f.tree);
-          // 1. Force skip if it's too small (not enough nodes to be a real screen)
-          // Exception: if there is only 1 file parsed, let it be the screen anyway.
-          if (parsedFiles.length > 1 && nodes < minNodeCount) return false;
-          
           const path = f.filename.toLowerCase();
           
-          // Skip UI library components
+          // Skip UI library components (Shadcn ui/ directory)
           if (path.includes('/ui/') || path.includes('components/ui')) return false;
 
-          // Explicitly defined pages (only if they are the default export)
-          if ((path.endsWith('page.tsx') || path.endsWith('page.jsx')) && f.isDefaultExport) return true;
-          if ((path.endsWith('app.tsx') || path.endsWith('app.jsx')) && f.isDefaultExport) return true;
-          if ((path.endsWith('index.tsx') || path.endsWith('index.jsx')) && f.isDefaultExport) return true;
+          // 1. Explicitly page files (page.tsx, index.tsx) — always screens
+          if (path.endsWith('page.tsx') || path.endsWith('page.jsx')) return true;
+          if (path.endsWith('index.tsx') || path.endsWith('index.jsx')) {
+            // Only if in a screen-like folder (not root index)
+            if (path.includes('/pages/') || path.includes('/screens/') || path.includes('/views/')) return true;
+          }
 
-          // Directory based (pages/ screens/ views/)
-          if ((path.includes('/pages/') || path.includes('/screens/') || path.includes('/views/')) && f.isDefaultExport) return true;
+          // 2. Directory-based: pages/, screens/, views/ — always screens
+          if (path.includes('/pages/') || path.includes('/screens/') || path.includes('/views/')) return true;
           
-          // Component name based
-          if (/screen|page|view|app|home|dashboard|login|register|layout|main/i.test(f.name) && f.isDefaultExport) return true;
+          // 3. app.tsx at root or in src/app
+          if (path.endsWith('app.tsx') || path.endsWith('app.jsx')) return true;
+
+          // 4. Component name contains Screen/Page/View keywords (case-insensitive)
+          if (/screen|page|view|home|dashboard|login|register|profile|detail|list|feed/i.test(f.name)) return true;
           
-          // Substantial components are treated as screens
-          if (nodes >= Math.max(12, minNodeCount * 2) && f.isDefaultExport) return true;
+          // 5. Substantial components with enough nodes are treated as screens
+          // (regardless of isDefaultExport, since many screen files export with named export)
+          if (nodes >= Math.max(8, minNodeCount)) return true;
           
           return false;
         });
+
+        // Fallback: if no screens found but we have parsed files, take the biggest ones
+        if (screens.length === 0 && parsedFiles.length > 0) {
+          screens = parsedFiles
+            .filter(f => !SKIP_COMPONENTS.has(f.name) && !f.filename.toLowerCase().includes('/ui/'))
+            .sort((a, b) => countNodes(b.tree) - countNodes(a.tree))
+            .slice(0, 10);
+          log(`Fallback: using top ${screens.length} parsed files as screens`, 'info');
+        }
 
         screens.sort((a, b) => countNodes(b.tree) - countNodes(a.tree));
 
@@ -225,8 +315,10 @@ import './style.css';
         screens.sort((a, b) => {
           const nameA = a.name.toLowerCase();
           const nameB = b.name.toLowerCase();
-          const weightA = Object.keys(orderMap).find(k => nameA.includes(k)) ? orderMap[Object.keys(orderMap).find(k => nameA.includes(k))] : 99;
-          const weightB = Object.keys(orderMap).find(k => nameB.includes(k)) ? orderMap[Object.keys(orderMap).find(k => nameB.includes(k))] : 99;
+          const keyA = Object.keys(orderMap).find(k => nameA.includes(k));
+          const keyB = Object.keys(orderMap).find(k => nameB.includes(k));
+          const weightA = keyA ? orderMap[keyA as keyof typeof orderMap] : 99;
+          const weightB = keyB ? orderMap[keyB as keyof typeof orderMap] : 99;
           return weightA - weightB || a.name.localeCompare(b.name);
         });
 
@@ -257,25 +349,31 @@ import './style.css';
             };
             applyHover(hoverTree);
             comp.variants = { Hover: hoverTree };
-            log(`  ✨ Added Hover variant to ${comp.name}`, 'info');
+            log(`  Added Hover variant to ${comp.name}`, 'info');
           }
         });
 
-        log(`✅ ${screens.length} screens, ${components.length} components`, 'success');
+        log(`Success: ${screens.length} screens, ${components.length} components`, 'success');
         screens.forEach(s => log(`  📱 ${s.name}`, 'success'));
         components.forEach(c => log(`  🧩 ${c.name}`, 'info'));
 
         setProgress(60, 'Sending to Figma...');
         
-        lastParsedAST = { screens, components, tokens: tokenMap, frameTemplate };
+        lastParsedAST = { screens, components, tokens: tokenMap, frameTemplate, framework };
         if (copyAstBtn) copyAstBtn.style.display = 'block';
 
-        parent.postMessage({ pluginMessage: { type: 'parse-files', screens, components, tokens: tokenMap, frameTemplate } }, '*');
+        // ── Render Parse Report ──
+        renderParseReport(parseSuccessList, parseFailList, parseSkipList);
+
+        parent.postMessage({ pluginMessage: { type: 'parse-files', screens, components, tokens: tokenMap, frameTemplate, framework } }, '*');
 
       } catch (err) {
         setProgress(0, 'Error: ' + err.message);
         log('Error: ' + err.message, 'error');
         console.error(err);
+
+        // Show partial report even on error
+        renderParseReport(parseSuccessList, parseFailList, parseSkipList);
       }
     }
 

@@ -3,6 +3,7 @@ import { loadFonts, createColorStyles, createTextStyles, hexToRgb } from './styl
 import { buildNode } from './node-builder';
 import { addStatusBar, addBottomNav, addPrototyping } from './prototyping';
 import { pluginLog } from './logger';
+import { setTokenVariableMap } from './figma-mapper';
 
 async function createFigmaVariables(tokens: Record<string, any>) {
   if (!tokens || Object.keys(tokens).length === 0) return;
@@ -45,22 +46,36 @@ figma.ui.onmessage = async (msg) => {
   const screens: ParsedScreen[] = msg.screens || [];
   const componentsList: ParsedScreen[] = msg.components || [];
   const tokens = msg.tokens || {};
+  const framework: string = msg.framework || 'generic';
   const createdFrames: FrameNode[] = [];
   const componentRegistry: Record<string, ComponentNode> = {};
 
+  pluginLog(`Framework: ${framework}`, 'info');
+
+
   try {
-    figma.ui.postMessage({ type: 'status', text: '🎨 Loading fonts & creating styles...', progress: 10 });
+    figma.ui.postMessage({ type: 'status', text: 'Loading fonts & creating styles...', progress: 10 });
     await loadFonts();
     await createColorStyles();
     await createTextStyles();
     await createFigmaVariables(tokens);
+
+    // Populate token-to-variable map so figma-mapper can bind colors to Local Variables
+    const varMap: Record<string, string> = {};
+    for (const v of figma.variables.getLocalVariables()) {
+      // Support both slash-separated ('colors/primary') and dot-separated ('colors.primary') formats
+      varMap[v.name.replace(/\//g, '.')] = v.id;     // 'colors/primary' -> 'colors.primary'
+      const shortName = v.name.split('/').pop();
+      if (shortName) varMap[shortName] = v.id;        // 'colors/primary' -> 'primary'
+    }
+    setTokenVariableMap(varMap);
 
     const startX = Math.round(figma.viewport.center.x - (screens.length * 400) / 2);
     const startY = Math.round(figma.viewport.center.y - 406);
 
     // ── Build Components First ──
     if (componentsList.length > 0) {
-      figma.ui.postMessage({ type: 'status', text: `🧩 Building ${componentsList.length} component(s)...`, progress: 15 });
+      figma.ui.postMessage({ type: 'status', text: `Building ${componentsList.length} component(s)...`, progress: 15 });
 
       const componentPage = figma.createPage();
       componentPage.name = '🧩 Components';
@@ -142,16 +157,30 @@ figma.ui.onmessage = async (msg) => {
       componentPage.appendChild(componentSection);
     }
 
-    figma.ui.postMessage({ type: 'status', text: `🏗 Building ${screens.length} screen(s)...`, progress: 20 });
+    figma.ui.postMessage({ type: 'status', text: `Building ${screens.length} screen(s)...`, progress: 20 });
 
     const frameTemplate = msg.frameTemplate || '375x812';
     const [templateWidth, templateHeight] = frameTemplate.split('x').map((n: string) => parseInt(n, 10));
 
-    for (let i = 0; i < screens.length; i++) {
+    // --- [START] FIX UNTUK UNPACKING ROOT 'App' ---
+    let actualScreens = screens;
+    if (screens.length === 1 && screens[0].name === 'App' && screens[0].tree?.children) {
+      actualScreens = screens[0].tree.children.map((childNode: any) => {
+        return {
+          filename: screens[0].filename,
+          name: childNode.originalTag || 'Screen',
+          tree: childNode,
+        };
+      });
+    }
+    // --- [END] FIX UNTUK UNPACKING ROOT 'App' ---
+
+    // Gunakan actualScreens untuk looping pembuatan frame
+    for (let i = 0; i < actualScreens.length; i++) {
       await new Promise(res => setTimeout(res, 15)); // Yield to main thread for UI updates
-      const screen = screens[i];
-      const progress = 20 + Math.round((i / screens.length) * 65);
-      figma.ui.postMessage({ type: 'status', text: `⚙️ Parsing: ${screen.name} (${i + 1}/${screens.length})`, progress });
+      const screen = actualScreens[i]; // Ambil dari actualScreens
+      const progress = 20 + Math.round((i / actualScreens.length) * 65);
+      figma.ui.postMessage({ type: 'status', text: `Parsing: ${screen.name} (${i + 1}/${actualScreens.length})`, progress });
 
       // Root screen frame
       const rootFrame = figma.createFrame();
@@ -183,15 +212,15 @@ figma.ui.onmessage = async (msg) => {
 
       if (screen.tree) {
         try {
-          pluginLog(`⚙️ Starting build for: ${screen.name}`, 'info');
+          pluginLog(`Starting build for: ${screen.name}`, 'info');
           await buildNode(screen.tree, contentArea, componentRegistry, 0);
-          pluginLog(`✅ Finished build for: ${screen.name}`, 'success');
+          pluginLog(`Finished build for: ${screen.name}`, 'success');
         } catch (err: any) {
-          pluginLog(`❌ Build crashed for ${screen.name}: ${err?.message || err}`, 'error');
+          pluginLog(`Build crashed for ${screen.name}: ${err?.message || err}`, 'error');
           try {
             const errText = figma.createText();
             errText.fontName = { family: 'Inter', style: 'Regular' };
-            errText.characters = `⚠️ Parse error in ${screen.name}`;
+            errText.characters = `Parse error in ${screen.name}`;
             errText.fills = [{ type: 'SOLID', color: { r: 1, g: 0.4, b: 0.4 } }];
             contentArea.appendChild(errText);
           } catch (_) { }
@@ -205,7 +234,7 @@ figma.ui.onmessage = async (msg) => {
     }
 
     // ── Add Prototyping ──
-    figma.ui.postMessage({ type: 'status', text: '🔗 Adding prototype connections...', progress: 88 });
+    figma.ui.postMessage({ type: 'status', text: 'Adding prototype connections...', progress: 88 });
     await addPrototyping(createdFrames);
 
     // ── Zoom to fit ──
@@ -218,13 +247,13 @@ figma.ui.onmessage = async (msg) => {
 
     figma.ui.postMessage({
       type: 'status',
-      text: `✅ Done! ${createdFrames.length} screens · ${colorStyleCount} color styles · ${textStyleCount} text styles · prototyping linked`,
+      text: `Done! ${createdFrames.length} screens · ${colorStyleCount} color styles · ${textStyleCount} text styles · prototyping linked`,
       progress: 100,
       done: true,
     });
 
   } catch (err: any) {
     console.error("FATAL ERROR:", err);
-    figma.ui.postMessage({ type: 'status', text: '❌ Fatal Error: ' + (err?.message || String(err)), progress: 0, isError: true });
+    figma.ui.postMessage({ type: 'status', text: 'Fatal Error: ' + (err?.message || String(err)), progress: 0, isError: true });
   }
 };

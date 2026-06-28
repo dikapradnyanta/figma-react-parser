@@ -37,8 +37,41 @@ export function isProgressBar(node: ParsedNode): boolean {
 }
 
 const TEXT_TAGS = new Set(['p','span','h1','h2','h3','h4','h5','h6','label','strong','em','small','a','li','td','th','caption','figcaption','legend','blockquote','time','code','pre','mark','b','i','u','abbr','cite','dt','dd']);
-const SKIP_TAGS = new Set(['script','style','link','meta','head','title','noscript','template','slot','svg','path','circle','rect','polygon','polyline','line','ellipse','use','defs','g','symbol']);
+const SKIP_TAGS = new Set(['script','style','link','meta','head','title','noscript','template','slot','path','circle','rect','polygon','polyline','line','ellipse','use','defs','g','symbol']);
 const INLINE_TAGS = new Set(['span','strong','em','b','i','u','mark','small','abbr','code','time','cite','a']);
+
+// ── Primitive Tag Normalizer ─────────────────────────────────
+// Converts Shadcn/Radix primitive tags (e.g. AccordionPrimitive.Root)
+// to their semantic HTML equivalents so the node builder treats them correctly.
+function normalizePrimitiveTag(tag: string): string {
+  if (!tag.includes('.') && !tag.includes('Primitive')) return tag;
+  const lower = tag.toLowerCase();
+  if (lower.endsWith('.root') || lower.endsWith('.portal') || lower.endsWith('.group')) return 'div';
+  if (lower.endsWith('.trigger') || lower.endsWith('.action') || lower.endsWith('.cancel')) return 'button';
+  if (lower.endsWith('.content') || lower.endsWith('.item') || lower.endsWith('.header') || lower.endsWith('.list')) return 'div';
+  if (lower.endsWith('.overlay') || lower.endsWith('.backdrop') || lower.endsWith('.viewport')) return 'div';
+  if (lower.endsWith('.title') || lower.endsWith('.description') || lower.endsWith('.label')) return 'p';
+  if (lower.endsWith('.indicator') || lower.endsWith('.thumb')) return 'div';
+  if (lower.endsWith('.image')) return 'img';
+  if (lower.endsWith('.icon') || lower.endsWith('.arrow')) return 'span';
+  // Default: treat as wrapper div
+  return 'div';
+}
+
+// ── Context Provider / Transparent Wrapper Detection ───────────
+// Tags like CarouselContext.Provider, ChartContext.Provider, etc.
+// are React context providers — they have no visual representation.
+// Render their children directly to the parent instead.
+function isTransparentWrapper(tag: string): boolean {
+  return (
+    tag.endsWith('.Provider') ||
+    tag.includes('Context.') ||
+    tag.includes('.context.') ||
+    tag === 'Fragment' ||
+    tag === 'React.Fragment' ||
+    tag === 'Slot'
+  );
+}
 
 export async function buildNode(
   node: ParsedNode,
@@ -48,31 +81,45 @@ export async function buildNode(
 ) {
   if (depth > 20) return;
 
+  // ── FILTER: sr-only elements should not be rendered ──────────────
+  // (sr-only = screen-reader only, invisible visually)
+  if (node.rawClassName?.includes('sr-only')) return;
+
+  // ── FILTER: Transparent wrappers (Context.Provider, Fragment) ──
+  // Render their children directly to parent without a wrapper frame.
+  if (isTransparentWrapper(node.originalTag)) {
+    for (const child of node.children) {
+      try { await buildNode(child, parent, componentRegistry, depth); } catch (_) {}
+    }
+    return;
+  }
+
+  // ── NORMALIZE: Shadcn/Radix Primitive tags ────────────────────
+  // Convert e.g. AccordionPrimitive.Root → 'div' before further processing.
+  const resolvedTag = normalizePrimitiveTag(node.originalTag);
+  const effectiveNode = resolvedTag !== node.originalTag
+    ? { ...node, originalTag: resolvedTag }
+    : node;
+
   // ── INSTANCE CREATION for CUSTOM COMPONENTS ──────────────────
-  if (node.originalTag.match(/^[A-Z]/) && componentRegistry && componentRegistry[node.originalTag]) {
-    const mainComponent = componentRegistry[node.originalTag];
+  if (effectiveNode.originalTag.match(/^[A-Z]/) && componentRegistry && componentRegistry[effectiveNode.originalTag]) {
+    const mainComponent = componentRegistry[effectiveNode.originalTag];
     try {
       const instance = mainComponent.createInstance();
-      instance.name = `${node.originalTag}`;
+      instance.name = `${effectiveNode.originalTag}`;
       parent.appendChild(instance);
-      
-      // We do not recurse into node.children here because the component instance 
-      // is static (unless we add component properties or overrides in the future).
-      // Applying overrides would require mapping node children/text into instance layers.
-      
-      // Apply style overrides on the root of the instance if any
       if (node.props?.actionTo) instance.setPluginData('actionTo', node.props?.actionTo);
       const tailwind = resolveTailwindClasses(node.rawClassName, node.originalTag);
       const inline = node.rawInlineStyle ? resolveInlineStyles(node.rawInlineStyle) : {};
       const style = mergeStyles(tailwind, inline);
-      applyResolvedStyle(instance, style, node.originalTag);
+      applyResolvedStyle(instance, style, node.originalTag, node.props);
       return;
     } catch(e) {
       console.log(`Failed to create instance for ${node.originalTag}:`, e);
     }
   }
-  if (SKIP_TAGS.has(node.originalTag)) return;
-  if (!node.originalTag) return;
+  if (SKIP_TAGS.has(effectiveNode.originalTag)) return;
+  if (!effectiveNode.originalTag) return;
 
   const cs = new Set(node.rawClassName);
   const hasChildren = node.children.length > 0;
@@ -107,6 +154,32 @@ export async function buildNode(
     if (cs.has('w-full')) { try { track.layoutSizingHorizontal = 'FILL'; } catch(_) {} }
     parent.appendChild(track);
     return;
+  }
+
+  // ── RAW SVG NODE ───────────────────────────────────────
+  // Inline <svg>...</svg> captured as rawSvg string by the parser
+  if (node.originalTag === 'svg' && node.props?.rawSvg) {
+    try {
+      const svgNode = figma.createNodeFromSvg(node.props.rawSvg as string);
+      svgNode.name = 'SVG';
+      // Respect explicit size from inline style or Tailwind classes
+      let svgW = 24, svgH = 24;
+      for (const c of node.rawClassName) {
+        const sw = c.match(/^w-(\d+(?:\.\d+)?)$/);
+        if (sw) svgW = getSpacing(sw[1]) * 4;
+        const sh = c.match(/^h-(\d+(?:\.\d+)?)$/);
+        if (sh) svgH = getSpacing(sh[1]) * 4;
+        const ss = c.match(/^size-(\d+(?:\.\d+)?)$/);
+        if (ss) { svgW = svgH = getSpacing(ss[1]) * 4; }
+      }
+      if (node.rawInlineStyle?.width) svgW = parseFloat(String(node.rawInlineStyle.width)) || svgW;
+      if (node.rawInlineStyle?.height) svgH = parseFloat(String(node.rawInlineStyle.height)) || svgH;
+      try { svgNode.resize(Math.max(svgW, 4), Math.max(svgH, 4)); } catch (_) {}
+      parent.appendChild(svgNode);
+      return;
+    } catch (e: any) {
+      pluginLog(`SVG parse failed on inline <svg>: ${e?.message || e}`, 'error');
+    }
   }
 
   // ── IMAGE PLACEHOLDER ─────────────────────────────────────
@@ -213,9 +286,9 @@ export async function buildNode(
     const tailwind = resolveTailwindClasses(node.rawClassName, node.originalTag);
     const inline = node.rawInlineStyle ? resolveInlineStyles(node.rawInlineStyle) : {};
     const style = mergeStyles(tailwind, inline);
-    applyResolvedStyle(frame, style, node.originalTag);
+    applyResolvedStyle(frame, style, node.originalTag, node.props);
   } catch (e: any) {
-    pluginLog(`   │ ✗ Styling error on <${node.originalTag}>: ${e?.message || e}`, 'error');
+    pluginLog(`   │ Styling error on <${node.originalTag}>: ${e?.message || e}`, 'error');
   }
 
   // If this text tag has BOTH text and children, add text as first child
@@ -250,7 +323,7 @@ export async function buildNode(
     try { await buildNode(child, frame, componentRegistry, depth + 1); }
     catch (e: any) { 
       console.error('buildNode child error:', e); 
-      pluginLog(`   │ ✗ Child build error at <${child?.originalTag}>: ${e?.message || e}`, 'error');
+      pluginLog(`   │ Child build error at <${child?.originalTag}>: ${e?.message || e}`, 'error');
     }
   }
 

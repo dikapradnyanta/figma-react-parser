@@ -1,7 +1,45 @@
 import { ResolvedStyle } from './types';
 import { hexToRgb } from './styles';
 
-export function applyResolvedStyle(frame: FrameNode | ComponentNode | InstanceNode, style: ResolvedStyle, tag: string): void {
+// ── Design Token Variable Binding ──────────────────────────
+// Populated by index.ts after createFigmaVariables runs
+let _tokenVariableMap: Record<string, string> = {}; // tokenName -> variableId
+
+export function setTokenVariableMap(map: Record<string, string>): void {
+  _tokenVariableMap = map;
+}
+
+/**
+ * Try to bind a Figma Local Variable to a paint property.
+ * Returns a bound SolidPaint if a matching variable is found, null otherwise.
+ */
+function tryBindColorVariable(colorName: string): SolidPaint | null {
+  if (!colorName || !Object.keys(_tokenVariableMap).length) return null;
+  // Try exact match, then prefix with 'colors.'
+  const vid = _tokenVariableMap[colorName]
+    ?? _tokenVariableMap['colors.' + colorName]
+    ?? _tokenVariableMap['color.' + colorName];
+  if (!vid) return null;
+  try {
+    const variable = figma.variables.getVariableById(vid);
+    if (!variable) return null;
+    return figma.variables.setBoundVariableForPaint(
+      { type: 'SOLID', color: { r: 0, g: 0, b: 0 } },
+      'color',
+      variable
+    ) as SolidPaint;
+  } catch (_) {
+    return null;
+  }
+}
+
+export function applyResolvedStyle(frame: FrameNode | ComponentNode | InstanceNode, style: ResolvedStyle, tag: string, nodeProps?: Record<string, any>): void {
+  // ── Next.js Image fill prop → FILL sizing on both axes ──
+  if (nodeProps?.nextjsFill) {
+    try { frame.layoutSizingHorizontal = 'FILL'; } catch (_) {}
+    try { (frame as any).layoutAlign = 'STRETCH'; } catch (_) {}
+    try { frame.layoutSizingVertical = 'FILL'; } catch (_) {}
+  }
   // ── Layout Mode & Alignment ──
   frame.layoutMode = style.flexDirection === 'row' ? 'HORIZONTAL' : 'VERTICAL';
   
@@ -77,16 +115,27 @@ export function applyResolvedStyle(frame: FrameNode | ComponentNode | InstanceNo
 
   // ── Fills & Strokes ──
   if (style.backgroundColor && style.backgroundColor !== 'transparent') {
-    let rgb = hexToRgb(style.backgroundColor);
-    if (!rgb) rgb = {r:0, g:0, b:0}; // fallback or map named colors later
-    frame.fills = [{ type: 'SOLID', color: rgb }];
+    // Try to bind to a Figma Variable first (Design Token)
+    const boundPaint = tryBindColorVariable(style.backgroundColor);
+    if (boundPaint) {
+      frame.fills = [boundPaint];
+    } else {
+      let rgb = hexToRgb(style.backgroundColor);
+      if (!rgb) rgb = { r: 0, g: 0, b: 0 };
+      frame.fills = [{ type: 'SOLID', color: rgb }];
+    }
   } else if (style.backgroundColor === 'transparent') {
     frame.fills = [];
   }
 
   if (style.borderColor || style.borderWidth) {
-    let rgb = style.borderColor ? hexToRgb(style.borderColor) : {r:0.8, g:0.8, b:0.8};
-    if (rgb) frame.strokes = [{ type: 'SOLID', color: rgb }];
+    const boundPaint = style.borderColor ? tryBindColorVariable(style.borderColor) : null;
+    if (boundPaint) {
+      frame.strokes = [boundPaint];
+    } else {
+      let rgb = style.borderColor ? hexToRgb(style.borderColor) : { r: 0.8, g: 0.8, b: 0.8 };
+      if (rgb) frame.strokes = [{ type: 'SOLID', color: rgb }];
+    }
     frame.strokeWeight = style.borderWidth || 1;
   }
 
@@ -150,6 +199,11 @@ export function applyResolvedStyle(frame: FrameNode | ComponentNode | InstanceNo
 
   if (style.opacity !== undefined) {
     frame.opacity = style.opacity;
+  }
+
+  // ── Clips Content (overflow-hidden) ──
+  if (style.clipsContent) {
+    try { (frame as any).clipsContent = true; } catch (_) {}
   }
 }
 

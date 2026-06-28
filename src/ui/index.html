@@ -8,10 +8,21 @@
   <h1>⚡ React → Figma Parser v2</h1>
   <p class="subtitle">Upload React/Next.js ZIP → auto-generate Figma screens dengan inline styles + Tailwind</p>
 
-  <div style="margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px;">
-    <div>
-      <label for="frameTemplateSelect" style="font-size: 11px; color: #8B949E;">Template:</label>
-      <select id="frameTemplateSelect" style="padding: 4px; border-radius: 4px; border: 1px solid #30363D; background: #161B22; color: #E6EDF3; font-size: 11px; margin-left: 4px;">
+  <div class="controls-row">
+    <!-- Framework Selector -->
+    <div class="control-group">
+      <label for="frameworkSelect" class="control-label">Framework:</label>
+      <select id="frameworkSelect" class="control-select">
+        <option value="nextjs-app">Next.js (App Router)</option>
+        <option value="nextjs-pages">Next.js (Pages Router)</option>
+        <option value="vite-cra">Vite / CRA</option>
+        <option value="generic" selected>Generic React</option>
+      </select>
+    </div>
+    <!-- Frame Template Selector -->
+    <div class="control-group">
+      <label for="frameTemplateSelect" class="control-label">Template:</label>
+      <select id="frameTemplateSelect" class="control-select">
         <option value="375x812">iPhone 11 Pro / X (375x812)</option>
         <option value="390x844">iPhone 14 (390x844)</option>
         <option value="375x667">iPhone 8 (375x667)</option>
@@ -19,9 +30,19 @@
         <option value="1440x1024">Desktop (1440x1024)</option>
       </select>
     </div>
-    <div>
-      <label for="minNodeInput" style="font-size: 11px; color: #8B949E;">Min nodes:</label>
-      <input type="number" id="minNodeInput" value="5" min="1" style="width: 50px; padding: 4px; border-radius: 4px; border: 1px solid #30363D; background: #161B22; color: #E6EDF3; font-size: 11px; margin-left: 4px;">
+  </div>
+
+  <div class="controls-row">
+    <!-- Min Nodes -->
+    <div class="control-group">
+      <label for="minNodeInput" class="control-label">Min nodes:</label>
+      <input type="number" id="minNodeInput" value="5" min="1" class="control-input" style="width:50px;">
+    </div>
+    <!-- Mock Count -->
+    <div class="control-group">
+      <label for="mockCountInput" class="control-label">Mock items:</label>
+      <input type="number" id="mockCountInput" value="3" min="1" max="20" class="control-input" style="width:50px;">
+      <span class="control-hint">(jumlah item .map())</span>
     </div>
   </div>
 
@@ -48,6 +69,22 @@
       </div>
       <div class="log-area" id="log-area"></div>
     </div>
+
+    <!-- ── Parse Report Panel ── -->
+    <div id="parse-report" class="parse-report" style="display:none;">
+      <div class="report-title">📊 Laporan Parsing</div>
+      <div class="report-stats" id="report-stats"></div>
+      <div class="report-sections">
+        <div class="report-col">
+          <div class="report-col-header report-success-header">✅ Sukses</div>
+          <div id="report-success-list" class="report-list"></div>
+        </div>
+        <div class="report-col">
+          <div class="report-col-header report-fail-header">❌ Gagal</div>
+          <div id="report-fail-list" class="report-list"></div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <div class="features">
@@ -59,6 +96,9 @@
     <span class="badge">✓ Icon Placeholders</span>
     <span class="badge">✓ Shadow Effects</span>
     <span class="badge">✓ Prototyping Links</span>
+    <span class="badge">✓ Framework-aware</span>
+    <span class="badge">✓ Next.js Image</span>
+    <span class="badge">✓ Dynamic Mock Count</span>
   </div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>

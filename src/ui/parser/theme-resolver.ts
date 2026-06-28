@@ -53,6 +53,39 @@
       return tokenMap;
     }
 
+    export function parseCssVariables(content: string) {
+      const tokenMap: Record<string, string | number> = {};
+      const cssVarPattern = /--([\w-]+)\s*:\s*([^;]+);/g;
+      let match;
+      while ((match = cssVarPattern.exec(content)) !== null) {
+        const key = `--${match[1]}`;
+        const val = match[2].trim();
+        tokenMap[key] = val;
+      }
+      return tokenMap;
+    }
+
+    export function parseTailwindConfig(content: string) {
+      const tokenMap: Record<string, string | number> = {};
+      // Simple regex for flat Tailwind color extraction
+      const objectPattern = /(?:colors|extend)\s*:\s*\{([\s\S]*?)\}/g;
+      let objMatch;
+      while ((objMatch = objectPattern.exec(content)) !== null) {
+        const objBody = objMatch[1];
+        const kvPattern = /['"]?([\w-]+)['"]?\s*:\s*("([^"]+)"|'([^']+)'|`([^`]+)`|([\d.]+))/g;
+        let kvMatch;
+        while ((kvMatch = kvPattern.exec(objBody)) !== null) {
+          const key = kvMatch[1];
+          const val = kvMatch[3] || kvMatch[4] || kvMatch[5] ||
+                      (kvMatch[6] !== undefined ? parseFloat(kvMatch[6]) : undefined);
+          if (val !== undefined) {
+            tokenMap[`colors.${key}`] = val;
+          }
+        }
+      }
+      return tokenMap;
+    }
+
     // Apply theme token substitution to source code
     // Replaces: colors.primary → "#0D3B66"
     export function applyThemeTokens(code: string, tokenMap: any) {
@@ -67,9 +100,18 @@
       for (const key of keys) {
         const val = tokenMap[key];
         const valStr = typeof val === 'number' ? String(val) : `"${val}"`;
-        // Replace occurrences like: colors.primary (not inside string literals ideally)
         const escapedKey = key.replace(/\./g, '\\.').replace(/\[/g, '\\[').replace(/\]/g, '\\]');
-        code = code.replace(new RegExp('\\b' + escapedKey + '\\b', 'g'), valStr);
+        
+        if (key.startsWith('--')) {
+          const valRaw = String(val);
+          // Handle var(--var)
+          code = code.replace(new RegExp(`var\\(${escapedKey}\\)`, 'g'), valStr);
+          // Handle --var (e.g., in bg-[--var])
+          code = code.replace(new RegExp(escapedKey, 'g'), valRaw);
+        } else {
+          // Replace occurrences like: colors.primary (not inside string literals ideally)
+          code = code.replace(new RegExp('\\b' + escapedKey + '\\b', 'g'), valStr);
+        }
       }
       return code;
     }

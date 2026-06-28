@@ -2,9 +2,9 @@ import { hexToRgb, safeLoadFont } from './styles';
 
 export async function connectPrototype(from: FrameNode, to: FrameNode, direction: 'LEFT' | 'RIGHT' = 'LEFT'): Promise<void> {
   try {
-    const reaction = {
+    const reaction: Reaction = {
       trigger: { type: 'ON_CLICK' } as Trigger,
-      action: {
+      actions: [{
         type: 'NODE',
         destinationId: to.id,
         navigation: 'NAVIGATE' as Navigation,
@@ -16,8 +16,8 @@ export async function connectPrototype(from: FrameNode, to: FrameNode, direction
           easing: { type: 'EASE_IN_AND_OUT' },
         } as Transition,
         preserveScrollPosition: false,
-      } as unknown as Action,
-    } as Reaction;
+      } as unknown as Action],
+    };
 
     await (from as any).setReactionsAsync([reaction]);
   } catch (_) { /* prototyping not critical */ }
@@ -41,23 +41,38 @@ export async function addPrototyping(frames: FrameNode[]): Promise<void> {
       
       if (targetFrame) {
         try {
-          const reaction = {
-            trigger: { type: 'ON_CLICK' },
-            action: {
+          const reaction: Reaction = {
+            trigger: { type: 'ON_CLICK' } as Trigger,
+            actions: [{
               type: 'NODE',
               destinationId: targetFrame.id,
-              navigation: 'NAVIGATE',
+              navigation: 'NAVIGATE' as Navigation,
               transition: {
                 type: 'SMART_ANIMATE',
                 duration: 0.3,
                 easing: { type: 'EASE_IN_AND_OUT' }
-              }
-            }
+              } as Transition,
+              preserveScrollPosition: false,
+            } as unknown as Action],
           };
-          // Cast to any to avoid strict type issues with Reaction types if they're outdated in TS
-          (triggerNode as any).reactions = [reaction];
+          await (triggerNode as any).setReactionsAsync([reaction]);
         } catch (e) {
-          console.error(`[code.ts] Failed to link prototype for ${rawAction}:`, e);
+          // Fallback: try simpler reaction without transition
+          try {
+            const simpleReaction: Reaction = {
+              trigger: { type: 'ON_CLICK' } as Trigger,
+              actions: [{
+                type: 'NODE',
+                destinationId: targetFrame.id,
+                navigation: 'NAVIGATE' as Navigation,
+                transition: null,
+                preserveScrollPosition: false,
+              } as unknown as Action],
+            };
+            await (triggerNode as any).setReactionsAsync([simpleReaction]);
+          } catch (e2) {
+            console.error(`[code.ts] Failed to link prototype for ${rawAction}:`, e2);
+          }
         }
       }
     }

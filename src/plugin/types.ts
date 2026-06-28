@@ -49,6 +49,8 @@ export interface ResolvedStyle {
   bottom?: number;
   textAlign?: 'LEFT' | 'CENTER' | 'RIGHT' | 'JUSTIFIED';
   fontFamily?: string;
+  clipsContent?: boolean;
+
 }
 
 export interface ParsedScreen {

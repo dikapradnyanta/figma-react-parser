@@ -69,6 +69,8 @@ export function resolveTailwindClasses(classes: string[], tag: string): Partial<
   // Height
   if (cs.has('h-full') || cs.has('h-screen')) {
     style.height = 'FILL';
+  } else if (cs.has('min-h-screen') || cs.has('min-h-full')) {
+    if (!style.height) style.height = 'FILL';
   } else {
     for (const c of classes) {
       const hm = c.match(/^h-(\d+(?:\.\d+)?)$/);
@@ -77,6 +79,34 @@ export function resolveTailwindClasses(classes: string[], tag: string): Partial<
       if (ha) style.height = parseInt(ha[1]);
     }
   }
+
+  // size-N shorthand (sets both width and height)
+  // e.g. size-4 = 16px, size-full = FILL
+  if (cs.has('size-full')) {
+    style.width = 'FILL';
+    style.height = 'FILL';
+  } else {
+    for (const c of classes) {
+      const sm = c.match(/^size-(\d+(?:\.\d+)?)$/);
+      if (sm) {
+        const v = getSpacing(sm[1]) * 4;
+        style.width = v;
+        style.height = v;
+      }
+      const sa = c.match(/^size-\[(\d+)(?:px)?\]$/);
+      if (sa) {
+        const v = parseInt(sa[1]);
+        style.width = v;
+        style.height = v;
+      }
+    }
+  }
+
+  // flex-1 / grow = FILL sizing on both axes (stretch in parent)
+  if (cs.has('flex-1') || cs.has('grow') || cs.has('flex-auto')) {
+    style.width = 'FILL';
+  }
+  // shrink-0 — informational only (Figma handles via HUG, no explicit mapping needed)
 
   // Padding
   for (const c of classes) {
@@ -126,6 +156,11 @@ export function resolveTailwindClasses(classes: string[], tag: string): Partial<
   for (const c of classes) {
     const bwm = c.match(/^border-(\d+)$/);
     if (bwm) style.borderWidth = parseInt(bwm[1]);
+  }
+
+  // Overflow — maps to Figma clipsContent
+  if (cs.has('overflow-hidden') || cs.has('overflow-clip') || cs.has('overflow-scroll') || cs.has('overflow-auto')) {
+    style.clipsContent = true;
   }
 
   // Text Properties

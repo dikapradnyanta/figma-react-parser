@@ -17,11 +17,35 @@ export const ICON_NAMES = new Set([
 
 import { ComponentNode } from '../../plugin/types';
 
+export interface ParseOptions {
+  /** Framework context: 'nextjs-app' | 'nextjs-pages' | 'vite-cra' | 'generic' */
+  framework?: 'nextjs-app' | 'nextjs-pages' | 'vite-cra' | 'generic';
+  /** Number of mock items to render for .map() calls (default: 3) */
+  mockCount?: number;
+}
 
-export function parseAllComponents(code: string, filename?: string): { name: string, tree: ComponentNode, isDefaultExport?: boolean }[] {
+/**
+ * Strip Next.js / React server-component directives before Babel parsing.
+ * This prevents AST errors when the file starts with "use client" or "use server".
+ */
+function stripDirectives(code: string): string {
+  // Remove "use client"; / 'use client'; / "use server"; / 'use server'; at top of file
+  return code.replace(/^(\s*["']use (client|server)["'];?\r?\n?)+/m, '');
+}
+
+export function parseAllComponents(
+  code: string,
+  filename?: string,
+  options: ParseOptions = {}
+): { name: string, tree: ComponentNode, isDefaultExport?: boolean }[] {
+  const { framework = 'generic', mockCount = 3 } = options;
+
+  // ── Pre-process: strip server/client directives ──
+  const cleanedCode = stripDirectives(code);
+
   let ast;
   try {
-    ast = parse(code, {
+    ast = parse(cleanedCode, {
       sourceType: 'module',
       plugins: ['jsx', 'typescript']
     });
@@ -71,7 +95,7 @@ export function parseAllComponents(code: string, filename?: string): { name: str
   for (const comp of components) {
     const jsx = findJSX(comp.node);
     if (jsx) {
-      const tree = parseJSX(jsx);
+      const tree = parseJSX(jsx, framework, mockCount);
       if (tree) {
         if (Array.isArray(tree)) {
           // If the root is a fragment, wrap it in a div
@@ -142,7 +166,59 @@ function extractASTStyleValue(node: any): string | number | null {
   return null;
 }
 
-function parseJSX(node: any): ComponentNode | ComponentNode[] | null {
+/**
+ * Determine if a JSX tag name is a Next.js Image component.
+ * Handles: <Image>, <NextImage>, or imported aliases.
+ */
+function isNextJsImageTag(tag: string, framework: string): boolean {
+  if (!framework.startsWith('nextjs')) return false;
+  // Matches 'Image', 'NextImage', or 'NextImg' (common aliases)
+  return /^(Next)?Image$/.test(tag) || tag === 'NextImg';
+}
+
+/**
+ * Reconstruct a minimal SVG string from a JSXElement AST node.
+ * Handles nested children (path, circle, rect, g, etc.).
+ */
+function reconstructSvgFromAST(node: any, depth = 0): string {
+  if (depth > 10 || !node || node.type !== 'JSXElement') return '';
+  const opening = node.openingElement;
+  let tag = '';
+  if (opening.name.type === 'JSXIdentifier') tag = opening.name.name.toLowerCase();
+  else if (opening.name.type === 'JSXMemberExpression') return ''; // skip member expressions
+
+  // Collect attributes as SVG attributes
+  const attrParts: string[] = [];
+  for (const attr of opening.attributes) {
+    if (attr.type !== 'JSXAttribute') continue;
+    const name = typeof attr.name.name === 'string' ? attr.name.name : '';
+    if (!name) continue;
+    // Convert camelCase to kebab-case for SVG attrs (e.g. strokeWidth -> stroke-width)
+    const svgName = name.replace(/([A-Z])/g, (m: string) => '-' + m.toLowerCase());
+    let val = '';
+    if (!attr.value) val = 'true';         // boolean attr
+    else if (attr.value.type === 'StringLiteral') val = attr.value.value;
+    else if (attr.value.type === 'JSXExpressionContainer') {
+      const e = attr.value.expression;
+      if (e.type === 'StringLiteral' || e.type === 'NumericLiteral') val = String(e.value);
+      else val = 'currentColor'; // fallback for expressions
+    }
+    attrParts.push(`${svgName}="${val}"`);
+  }
+
+  const selfClosing = node.closingElement === null;
+  const childStr = selfClosing ? '' : node.children
+    .map((c: any) => reconstructSvgFromAST(c, depth + 1))
+    .filter(Boolean)
+    .join('');
+
+  const attrStr = attrParts.length ? ' ' + attrParts.join(' ') : '';
+  return selfClosing
+    ? `<${tag}${attrStr}/>`
+    : `<${tag}${attrStr}>${childStr}</${tag}>`;
+}
+
+function parseJSX(node: any, framework: string = 'generic', mockCount: number = 3): ComponentNode | ComponentNode[] | null {
   if (node.type === 'JSXElement') {
     const opening = node.openingElement;
     let tag = '';
@@ -152,10 +228,39 @@ function parseJSX(node: any): ComponentNode | ComponentNode[] | null {
       tag = `${opening.name.object.name}.${opening.name.property.name}`;
     }
 
+    // ── SVG: capture entire <svg>...</svg> as rawSvg string ──
+    // Do NOT iterate children; pass raw SVG to node-builder for createNodeFromSvg()
+    if (tag.toLowerCase() === 'svg') {
+      const rawSvg = reconstructSvgFromAST(node);
+      const svgAttrs: Record<string, string> = {};
+      for (const attr of opening.attributes) {
+        if (attr.type === 'JSXAttribute' && typeof attr.name.name === 'string') {
+          const attrName = attr.name.name;
+          if (attr.value?.type === 'StringLiteral') svgAttrs[attrName] = attr.value.value;
+          else if (attr.value?.type === 'JSXExpressionContainer') {
+            const e = attr.value.expression;
+            if (e.type === 'StringLiteral' || e.type === 'NumericLiteral') svgAttrs[attrName] = String(e.value);
+          }
+        }
+      }
+      return {
+        type: 'image',
+        originalTag: 'svg',
+        rawClassName: (svgAttrs.className || '').split(/\s+/).filter(Boolean),
+        rawInlineStyle: {},
+        props: { ...svgAttrs, rawSvg: rawSvg || '<svg/>' },
+        children: [],
+      };
+    }
+
     let classes: string[] = [];
     const inlineStyle: Record<string, string | number> = {};
     const attrs: Record<string, string> = {};
     let actionTo: string | undefined = undefined;
+
+    // ── Next.js Image specific props ──
+    let nextjsFill = false;
+    let nextjsSizes: string | undefined = undefined;
 
     for (const attr of opening.attributes) {
       if (attr.type === 'JSXAttribute') {
@@ -181,11 +286,19 @@ function parseJSX(node: any): ComponentNode | ComponentNode[] | null {
             }
           }
         } else if (attrName === 'to' || attrName === 'href') {
-          if (attr.value && attr.value.type === 'StringLiteral') {
-            actionTo = attr.value.value;
-          } else if (attr.value && attr.value.type === 'JSXExpressionContainer') {
-            const val = extractASTStyleValue(attr.value.expression);
-            if (val !== null) actionTo = String(val);
+          // ── Framework-aware routing ──
+          // Next.js uses href on <Link>; React Router uses 'to'
+          const isNextJsLink = framework.startsWith('nextjs') && attrName === 'href';
+          const isReactRouterLink = (framework === 'vite-cra' || framework === 'generic') && attrName === 'to';
+          const isGenericHref = attrName === 'href';
+
+          if (isNextJsLink || isReactRouterLink || isGenericHref) {
+            if (attr.value && attr.value.type === 'StringLiteral') {
+              actionTo = attr.value.value;
+            } else if (attr.value && attr.value.type === 'JSXExpressionContainer') {
+              const val = extractASTStyleValue(attr.value.expression);
+              if (val !== null) actionTo = String(val);
+            }
           }
         } else if (attrName === 'onClick') {
            if (attr.value && attr.value.type === 'JSXExpressionContainer') {
@@ -212,13 +325,42 @@ function parseJSX(node: any): ComponentNode | ComponentNode[] | null {
                }
              }
            }
+        } else if (attrName === 'fill' && isNextJsImageTag(tag, framework)) {
+          // Next.js <Image fill /> prop — boolean attribute (no value = true)
+          nextjsFill = true;
+        } else if (attrName === 'sizes' && isNextJsImageTag(tag, framework)) {
+          if (attr.value && attr.value.type === 'StringLiteral') {
+            nextjsSizes = attr.value.value;
+          }
+        } else if (attrName === 'objectFit' && isNextJsImageTag(tag, framework)) {
+          // Map objectFit to inline style
+          if (attr.value && attr.value.type === 'StringLiteral') {
+            inlineStyle['objectFit'] = attr.value.value;
+          }
         } else {
           // Other attributes (src, alt, etc)
           if (attr.value && attr.value.type === 'StringLiteral') {
             attrs[attrName] = attr.value.value;
           } else if (attr.value && attr.value.type === 'JSXExpressionContainer') {
-            const val = extractASTStyleValue(attr.value.expression);
-            if (val !== null) attrs[attrName] = String(val);
+            const expr = attr.value.expression;
+            // Expression prop tagging: mark dynamic values with '$expr:' prefix
+            // so the plugin can distinguish state/function props from static strings
+            if (expr.type === 'Identifier') {
+              // Simple variable reference: onChange={setTab} -> '$expr:setTab'
+              attrs[attrName] = `$expr:${expr.name}`;
+            } else if (expr.type === 'MemberExpression') {
+              // Member expression: data={user.name} -> '$expr:user.name'
+              const obj = expr.object?.name ?? '';
+              const prop = expr.property?.name ?? '';
+              attrs[attrName] = `$expr:${obj}.${prop}`;
+            } else {
+              // Literals and other expressions: resolve to static value
+              const val = extractASTStyleValue(expr);
+              if (val !== null) attrs[attrName] = String(val);
+            }
+          } else if (attr.value === null) {
+            // Boolean attribute (e.g. <Image fill />) — store as 'true'
+            attrs[attrName] = 'true';
           }
         }
       }
@@ -226,7 +368,7 @@ function parseJSX(node: any): ComponentNode | ComponentNode[] | null {
 
     const children: ComponentNode[] = [];
     for (const child of node.children) {
-      const parsedChild = parseJSX(child);
+      const parsedChild = parseJSX(child, framework, mockCount);
       if (parsedChild) {
         if (Array.isArray(parsedChild)) {
           children.push(...parsedChild);
@@ -238,12 +380,18 @@ function parseJSX(node: any): ComponentNode | ComponentNode[] | null {
 
     const props: Record<string, any> = { ...attrs };
     if (actionTo) props.actionTo = actionTo;
+
+    // Attach Next.js Image specific props for figma-mapper
+    if (nextjsFill) props.nextjsFill = true;
+    if (nextjsSizes) props.nextjsSizes = nextjsSizes;
     
     let type: 'frame' | 'text' | 'image' | 'group' = 'frame';
     const tLower = tag.toLowerCase();
     const textTags = ['p','span','h1','h2','h3','h4','h5','h6','label','strong','em','small','a','li','td','th','caption','figcaption','legend','blockquote','time','code','pre','mark','b','i','u','abbr','cite','dt','dd'];
     if (textTags.includes(tLower)) type = 'text';
     else if (['img', 'image', 'video', 'figure'].includes(tLower)) type = 'image';
+    // Next.js <Image> component (capital I) is also treated as image
+    else if (isNextJsImageTag(tag, framework)) type = 'image';
 
     return { type, originalTag: tag, rawClassName: classes, rawInlineStyle: inlineStyle, props, children };
   } else if (node.type === 'JSXText') {
@@ -254,14 +402,15 @@ function parseJSX(node: any): ComponentNode | ComponentNode[] | null {
   } else if (node.type === 'JSXExpressionContainer') {
     if (node.expression.type === 'CallExpression') {
       if (node.expression.callee.type === 'MemberExpression' && node.expression.callee.property.name === 'map') {
-        // Array map! Simulate 3 elements.
+        // Array map! Simulate N elements based on mockCount.
         const callback = node.expression.arguments[0];
         const returnedJSX = findJSX(callback);
         if (returnedJSX) {
-          const parsedChild = parseJSX(returnedJSX);
+          const parsedChild = parseJSX(returnedJSX, framework, mockCount);
           if (parsedChild) {
              const children = [];
-             for(let i=0; i<3; i++) {
+             const count = Math.max(1, mockCount); // ensure at least 1
+             for (let i = 0; i < count; i++) {
                 children.push(JSON.parse(JSON.stringify(Array.isArray(parsedChild) ? parsedChild[0] : parsedChild)));
              }
              return children;
@@ -269,11 +418,11 @@ function parseJSX(node: any): ComponentNode | ComponentNode[] | null {
         }
       }
     } else if (node.expression.type === 'LogicalExpression' && node.expression.operator === '&&') {
-      const right = parseJSX(node.expression.right);
+      const right = parseJSX(node.expression.right, framework, mockCount);
       if (right) return right;
     } else if (node.expression.type === 'ConditionalExpression') {
-      // condition ? A : B
-      const consequent = parseJSX(node.expression.consequent);
+      // condition ? A : B — take the consequent (A) for static rendering
+      const consequent = parseJSX(node.expression.consequent, framework, mockCount);
       if (consequent) return consequent;
     } else if (node.expression.type === 'StringLiteral' || node.expression.type === 'NumericLiteral') {
       return { type: 'text', originalTag: 'span', rawClassName: [], props: {}, text: String(node.expression.value), children: [] };
@@ -281,7 +430,7 @@ function parseJSX(node: any): ComponentNode | ComponentNode[] | null {
   } else if (node.type === 'JSXFragment') {
     const children: ComponentNode[] = [];
     for (const child of node.children) {
-      const parsedChild = parseJSX(child);
+      const parsedChild = parseJSX(child, framework, mockCount);
       if (parsedChild) {
         if (Array.isArray(parsedChild)) children.push(...parsedChild);
         else children.push(parsedChild);

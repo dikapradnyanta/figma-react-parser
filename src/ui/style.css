@@ -10,25 +10,94 @@
       -webkit-text-fill-color: transparent; margin-bottom: 4px;
     }
     p.subtitle { font-size: 11px; color: #8B949E; margin-bottom: 14px; }
+
+    /* ── Controls Row ── */
+    .controls-row {
+      display: flex; align-items: center; gap: 12px;
+      margin-bottom: 8px; flex-wrap: wrap;
+    }
+    .control-group {
+      display: flex; align-items: center; gap: 4px;
+    }
+    .control-label { font-size: 11px; color: #8B949E; white-space: nowrap; }
+    .control-select, .control-input {
+      padding: 4px 6px; border-radius: 4px;
+      border: 1px solid #30363D; background: #161B22;
+      color: #E6EDF3; font-size: 11px;
+    }
+    .control-select:focus, .control-input:focus {
+      outline: none; border-color: #4A90E2;
+    }
+    .control-hint { font-size: 10px; color: #484F58; }
+
+    /* ── Dropzone ── */
     #dropzone {
       border: 2px dashed #30363D; border-radius: 12px;
       padding: 28px 16px; text-align: center; cursor: pointer;
       transition: all 0.2s ease; background: #161B22;
+      margin-top: 6px;
     }
     #dropzone:hover, #dropzone.hover { border-color: #4A90E2; background: rgba(74,144,226,0.07); }
     #dropzone .icon { font-size: 28px; margin-bottom: 8px; }
     #dropzone .main-text { font-size: 13px; font-weight: 600; color: #C9D1D9; margin-bottom: 4px; }
     #dropzone .sub-text { font-size: 10px; color: #6E7681; }
+
+    /* ── Status Area ── */
     #status-area { display: none; margin-top: 14px; background: #161B22; border-radius: 12px; padding: 14px; }
     #status-area.visible { display: block; }
     .progress-bg { width: 100%; height: 4px; background: #30363D; border-radius: 2px; margin: 8px 0; overflow: hidden; }
     .progress-fill { height: 100%; background: linear-gradient(90deg, #4A90E2, #A78BFA); border-radius: 2px; transition: width 0.3s ease; width: 0%; }
     .status-text { font-size: 11px; color: #8B949E; }
+
+    /* ── Copy Buttons ── */
     .copy-btn { background: transparent; border: none; color: #8B949E; cursor: pointer; padding: 4px; border-radius: 4px; transition: background 0.2s, color 0.2s; display: flex; align-items: center; justify-content: center; }
     .copy-btn:hover { background: #30363D; color: #E6EDF3; }
     .copy-btn:active { background: #1C2128; }
+
+    /* ── Log Area ── */
     .log-area { margin-top: 8px; font-size: 10px; color: #6E7681; font-family: 'Courier New', monospace; max-height: 120px; overflow-y: auto; line-height: 1.7; }
     .log-line { margin: 1px 0; }
     .log-success { color: #3FB950; } .log-error { color: #F85149; } .log-info { color: #58A6FF; }
+
+    /* ── Parse Report Panel ── */
+    .parse-report {
+      margin-top: 12px;
+      border-top: 1px solid #21262D;
+      padding-top: 10px;
+    }
+    .report-title {
+      font-size: 11px; font-weight: 600; color: #C9D1D9;
+      margin-bottom: 6px;
+    }
+    .report-stats {
+      font-size: 10px; color: #8B949E;
+      margin-bottom: 8px;
+      display: flex; gap: 12px; flex-wrap: wrap;
+    }
+    .report-stat-item { display: flex; align-items: center; gap: 4px; }
+    .report-stat-dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      display: inline-block;
+    }
+    .dot-success { background: #3FB950; }
+    .dot-fail    { background: #F85149; }
+    .dot-skip    { background: #8B949E; }
+    .report-sections {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+    }
+    .report-col { background: #0D1117; border-radius: 6px; padding: 8px; }
+    .report-col-header {
+      font-size: 10px; font-weight: 600;
+      margin-bottom: 4px; padding-bottom: 4px;
+      border-bottom: 1px solid #21262D;
+    }
+    .report-success-header { color: #3FB950; }
+    .report-fail-header    { color: #F85149; }
+    .report-list { font-size: 9px; color: #6E7681; font-family: 'Courier New', monospace; max-height: 80px; overflow-y: auto; line-height: 1.8; }
+    .report-list-item { display: flex; align-items: baseline; gap: 4px; }
+    .report-list-item .item-name { color: #C9D1D9; }
+    .report-list-item .item-detail { color: #484F58; }
+
+    /* ── Feature Badges ── */
     .features { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 14px; }
     .badge { background: #1C2128; border: 1px solid #30363D; border-radius: 20px; padding: 3px 8px; font-size: 10px; color: #8B949E; }
